@@ -81,6 +81,23 @@ processing:
   
   # Pause signal file location
   pause_signal_file: .state/PAUSE
+  
+  # Mac Mini M1 Optimization: FFmpeg threads (8 cores: 4 performance + 4 efficiency)
+  ffmpeg_threads: 8
+
+# I/O Optimization for External Drives
+io:
+  # Buffer sizes for external drive performance (MB)
+  read_buffer_mb: 32
+  write_buffer_mb: 32
+  
+# macOS Specific Settings
+macos:
+  # Prevent system sleep during conversion
+  prevent_sleep: true
+  
+  # Use low-priority I/O (set to true if system feels sluggish during conversion)
+  low_priority_io: false
 
 # Logging
 logging:

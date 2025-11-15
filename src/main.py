@@ -64,7 +64,8 @@ class ConversionOrchestrator:
             dither_method=config.get('conversion.audio_filter.dither_method', 'triangular'),
             lowpass_freq=config.get('conversion.audio_filter.lowpass_freq', 40000),
             flac_compression_level=config.get('conversion.flac_compression_level', 8),
-            preserve_metadata=config.get('conversion.preserve_metadata', True)
+            preserve_metadata=config.get('conversion.preserve_metadata', True),
+            ffmpeg_threads=config.get('processing.ffmpeg_threads', 0)
         )
         
         self.state_manager = StateManager()

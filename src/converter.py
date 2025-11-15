@@ -31,7 +31,8 @@ class AudioConverter:
         dither_method: str = "triangular",
         lowpass_freq: int = 40000,
         flac_compression_level: int = 8,
-        preserve_metadata: bool = True
+        preserve_metadata: bool = True,
+        ffmpeg_threads: int = 0
     ):
         """
         Initialize converter.
@@ -46,6 +47,7 @@ class AudioConverter:
             lowpass_freq: Lowpass filter frequency in Hz (0 to disable)
             flac_compression_level: FLAC compression level (0-12)
             preserve_metadata: Whether to preserve source metadata
+            ffmpeg_threads: Number of threads for ffmpeg (0 = auto)
         """
         self.sample_rate = sample_rate
         self.bit_depth = bit_depth
@@ -56,6 +58,7 @@ class AudioConverter:
         self.lowpass_freq = lowpass_freq
         self.flac_compression_level = flac_compression_level
         self.preserve_metadata = preserve_metadata
+        self.ffmpeg_threads = ffmpeg_threads
         
         # Verify ffmpeg is available
         if not self._check_ffmpeg():
@@ -175,6 +178,10 @@ class AudioConverter:
             '-i', str(input_path)
         ]
         
+        # Add thread count if specified
+        if self.ffmpeg_threads > 0:
+            cmd.extend(['-threads', str(self.ffmpeg_threads)])
+        
         # Add audio filters if any
         if filters:
             cmd.extend(['-af', ','.join(filters)])
@@ -239,6 +246,10 @@ class AudioConverter:
             '-map', '0:a:0'  # Select first audio stream
         ]
         
+        # Add thread count if specified
+        if self.ffmpeg_threads > 0:
+            cmd.extend(['-threads', str(self.ffmpeg_threads)])
+        
         # Add audio filters if any
         if filters:
             cmd.extend(['-af', ','.join(filters)])
@@ -278,10 +289,17 @@ class AudioConverter:
             'ffmpeg',
             '-i', str(input_path),
             '-map', '0:a:0',  # Select first audio stream
+        ]
+        
+        # Add thread count if specified
+        if self.ffmpeg_threads > 0:
+            cmd.extend(['-threads', str(self.ffmpeg_threads)])
+        
+        cmd.extend([
             '-c:a', 'dsd_lsbf_planar',  # DSD codec
             '-y',
             str(output_path)
-        ]
+        ])
         
         return self._run_ffmpeg(cmd)
     
