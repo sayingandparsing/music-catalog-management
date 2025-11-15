@@ -1,0 +1,7 @@
+click>=8.1.0
+pyyaml>=6.0
+mutagen>=1.47.0
+musicbrainzngs>=0.7.1
+python3-discogs-client>=2.3.0
+tqdm>=4.66.0
+

@@ -1,0 +1,126 @@
+# DSD Music Converter - Example Configuration
+# Copy this file to config.yaml and customize as needed
+
+# Conversion Settings
+conversion:
+  # Mode: 'iso_dsf_to_flac' or 'iso_to_dsf'
+  mode: iso_dsf_to_flac
+  
+  # Sample rate options: 88200, 96000, 176400, 192000 (Hz)
+  # 88200 = 24/88.2, 96000 = 24/96, 176400 = 24/176.4, 192000 = 24/192
+  sample_rate: 88200
+  
+  # Bit depth (only for PCM/FLAC conversion)
+  bit_depth: 24
+  
+  # Audio filter settings for high-quality resampling
+  audio_filter:
+    # Resampler: 'soxr' (high quality) or 'swr' (standard)
+    resampler: soxr
+    
+    # SoX resampler precision (20-28, higher is better quality but slower)
+    soxr_precision: 28
+    
+    # Dither method: 'triangular', 'rectangular', 'none'
+    # Triangular is recommended for best quality
+    dither_method: triangular
+    
+    # Lowpass filter frequency (Hz) - removes ultrasonic content before downsampling
+    # Set to 0 to disable. Recommended: 40000 for 88.2/96kHz, 80000 for 176.4/192kHz
+    lowpass_freq: 40000
+  
+  # FLAC compression level (0-12, higher is smaller file but slower encoding)
+  # 8 is a good balance between size and speed
+  flac_compression_level: 8
+  
+  # Preserve metadata from source files
+  preserve_metadata: true
+
+# Paths
+paths:
+  # Archive location for original files (REQUIRED - set this!)
+  archive_dir: /path/to/your/archive
+  
+  # Output directory (null = same as input directory)
+  output_dir: null
+
+# Metadata Enrichment (optional)
+metadata:
+  # Enable metadata enrichment
+  enabled: false
+  
+  # Sources to use (in order of preference)
+  # MusicBrainz is free, Discogs requires API token
+  sources:
+    - musicbrainz
+    - discogs
+  
+  # Discogs API credentials
+  # Get your token at: https://www.discogs.com/settings/developers
+  discogs:
+    user_token: null
+  
+  # What metadata to enrich
+  enrich:
+    - artist
+    - album
+    - title
+    - track_number
+    - date
+    - genre
+    - label
+    - catalog_number
+  
+  # Behavior: 'fill_missing' (only add to empty fields) or 'overwrite' (replace all)
+  behavior: fill_missing
+
+# Processing Options
+processing:
+  # Maximum retry attempts per file before giving up
+  max_retries: 3
+  
+  # Skip entire album if any file fails (after retries)
+  # If false, continues converting other files in album
+  skip_album_on_error: true
+  
+  # Check for pause signal between albums
+  check_pause: true
+  
+  # Pause signal file location
+  pause_signal_file: .state/PAUSE
+
+# Logging
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: INFO
+  
+  # Log file location
+  log_file: conversion.log
+  
+  # Error log file location (errors and critical only)
+  error_log_file: conversion_errors.log
+  
+  # Include timestamps in console output
+  console_timestamps: true
+
+# File Handling
+files:
+  # Extensions to treat as music files
+  music_extensions:
+    - .iso
+    - .dsf
+    - .dff
+  
+  # Extensions to copy as-is (non-music files)
+  # These files will be copied to output without conversion
+  copy_extensions:
+    - .jpg
+    - .jpeg
+    - .png
+    - .pdf
+    - .txt
+    - .log
+    - .cue
+    - .m3u
+    - .nfo
+

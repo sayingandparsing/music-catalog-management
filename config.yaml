@@ -1,0 +1,117 @@
+# DSD Music Converter - Default Configuration
+
+# Conversion Settings
+conversion:
+  # Mode: 'iso_dsf_to_flac' or 'iso_to_dsf'
+  mode: iso_dsf_to_flac
+  
+  # Sample rate options: 88200, 96000, 176400, 192000 (Hz)
+  sample_rate: 88200
+  
+  # Bit depth (only for PCM/FLAC conversion)
+  bit_depth: 24
+  
+  # Audio filter settings for high-quality resampling
+  audio_filter:
+    # Resampler: 'soxr' (high quality) or 'swr' (standard)
+    resampler: soxr
+    
+    # SoX resampler precision (20-28, higher is better)
+    soxr_precision: 28
+    
+    # Dither method: 'triangular', 'rectangular', 'none'
+    dither_method: triangular
+    
+    # Lowpass filter frequency (Hz) - removes ultrasonic content
+    # Set to 0 to disable
+    lowpass_freq: 40000
+  
+  # FLAC compression level (0-12, higher is smaller file but slower)
+  flac_compression_level: 8
+  
+  # Preserve metadata from source files
+  preserve_metadata: true
+
+# Paths
+paths:
+  # Archive location for original files (required)
+  archive_dir: /Volumes/PrimaryHD_8TB/ConversionTest/Archive
+  
+  # Output directory (null = same as input)
+  output_dir: /Volumes/PrimaryHD_8TB/ConversionTest/Output
+
+# Metadata Enrichment (optional)
+metadata:
+  # Enable metadata enrichment
+  enabled: false
+  
+  # Sources to use (in order of preference)
+  sources:
+    - musicbrainz
+    - discogs
+  
+  # Discogs API credentials (required for Discogs)
+  discogs:
+    user_token: null
+  
+  # What to enrich
+  enrich:
+    - artist
+    - album
+    - title
+    - track_number
+    - date
+    - genre
+    - label
+    - catalog_number
+  
+  # Behavior: 'fill_missing' or 'overwrite'
+  behavior: fill_missing
+
+# Processing Options
+processing:
+  # Maximum retry attempts per file
+  max_retries: 3
+  
+  # Skip album if any file fails after retries
+  skip_album_on_error: true
+  
+  # Check for pause signal between albums
+  check_pause: true
+  
+  # Pause signal file location
+  pause_signal_file: .state/PAUSE
+
+# Logging
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  level: INFO
+  
+  # Log file location
+  log_file: conversion.log
+  
+  # Error log file location
+  error_log_file: conversion_errors.log
+  
+  # Include timestamps in console output
+  console_timestamps: true
+
+# File Handling
+files:
+  # Extensions to treat as music files
+  music_extensions:
+    - .iso
+    - .dsf
+    - .dff
+  
+  # Extensions to copy as-is (non-music files)
+  copy_extensions:
+    - .jpg
+    - .jpeg
+    - .png
+    - .pdf
+    - .txt
+    - .log
+    - .cue
+    - .m3u
+
