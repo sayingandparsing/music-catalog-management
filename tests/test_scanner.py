@@ -202,7 +202,8 @@ class TestDirectoryScanner:
     def test_scan_nested_album(self, sample_nested_album_structure):
         """Test scanning album with nested subdirectories."""
         scanner = DirectoryScanner()
-        albums = scanner.scan(sample_nested_album_structure)
+        # Use single_album=True to treat the directory as one album with nested subdirectories
+        albums = scanner.scan(sample_nested_album_structure, single_album=True)
         
         assert len(albums) == 1
         album = albums[0]
@@ -346,7 +347,8 @@ class TestDirectoryScanner:
     def test_relative_path_calculation(self, sample_nested_album_structure):
         """Test that relative paths are calculated correctly."""
         scanner = DirectoryScanner()
-        albums = scanner.scan(sample_nested_album_structure)
+        # Use single_album=True to treat the directory as one album
+        albums = scanner.scan(sample_nested_album_structure, single_album=True)
         
         album = albums[0]
         

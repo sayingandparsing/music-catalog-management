@@ -31,6 +31,16 @@ conversion:
   
   # Preserve metadata from source files
   preserve_metadata: true
+  
+  # FLAC Standardization (standardize FLAC files to 24/88.2)
+  flac_standardization:
+    # Enable FLAC to FLAC conversion
+    enabled: false
+    
+    # Behavior for higher-quality files (e.g., 24/192, 32/96)
+    # 'downsample': Convert to 24/88.2
+    # 'skip': Leave higher-quality files unchanged
+    higher_quality_behavior: skip
 
 # Paths
 paths:
@@ -39,6 +49,14 @@ paths:
   
   # Output directory (null = same as input)
   output_dir: /Volumes/PrimaryHD_8TB/ConversionTest/Output
+
+# Database Settings
+database:
+  # Enable database tracking
+  enabled: true
+  
+  # Database file path
+  path: ./music_catalog.duckdb
 
 # Metadata Enrichment (optional)
 metadata:
@@ -52,7 +70,7 @@ metadata:
   
   # Discogs API credentials (required for Discogs)
   discogs:
-    user_token: null
+    user_token: XNbUcrppaAqcGWzpVdjVrnXFIMkHDyWeiGMFdShU
   
   # What to enrich
   enrich:
@@ -84,6 +102,15 @@ processing:
   
   # Mac Mini M1 Optimization: FFmpeg threads (8 cores: 4 performance + 4 efficiency)
   ffmpeg_threads: 8
+  
+  # Skip albums that have already been processed
+  skip_processed: true
+  
+  # Verify checksums when checking for processed albums
+  verify_checksums: true
+  
+  # Calculate dynamic range metrics during conversion
+  calculate_dynamic_range: true
 
 # I/O Optimization for External Drives
 io:
@@ -120,6 +147,7 @@ files:
     - .iso
     - .dsf
     - .dff
+    - .flac
   
   # Extensions to copy as-is (non-music files)
   copy_extensions:

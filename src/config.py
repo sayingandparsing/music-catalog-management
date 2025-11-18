@@ -123,6 +123,20 @@ class Config:
                 f"Must be one of {valid_modes}"
             )
         
+        # Validate FLAC standardization settings
+        flac_std_enabled = self.get('conversion.flac_standardization.enabled', False)
+        if flac_std_enabled:
+            higher_quality_behavior = self.get(
+                'conversion.flac_standardization.higher_quality_behavior',
+                'skip'
+            )
+            valid_behaviors = ['skip', 'downsample']
+            if higher_quality_behavior not in valid_behaviors:
+                errors.append(
+                    f"Invalid higher_quality_behavior: {higher_quality_behavior}. "
+                    f"Must be one of {valid_behaviors}"
+                )
+        
         # Validate sample rate
         sample_rate = self.get('conversion.sample_rate')
         valid_rates = [88200, 96000, 176400, 192000]

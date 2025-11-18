@@ -1,6 +1,10 @@
 """
 State management for conversion process.
 Handles persistence, crash recovery, and pause/resume functionality.
+
+This module complements the database by maintaining lightweight JSON state
+for active conversion sessions, while the database provides long-term storage
+and historical tracking.
 """
 
 import json
@@ -65,22 +69,35 @@ class ConversionSession:
 class StateManager:
     """
     Manages conversion state for crash recovery and resume.
+    
+    The StateManager maintains lightweight JSON state files for active conversion
+    sessions. This complements the database by providing:
+    - Quick resume capability after interruptions
+    - Minimal overhead during active conversions
+    - Human-readable state files for debugging
+    
+    The database provides:
+    - Long-term album and metadata storage
+    - Historical processing records
+    - Advanced querying capabilities
     """
     
     STATE_DIR = Path(".state")
     STATE_FILE = "conversion_state.json"
     PAUSE_SIGNAL_FILE = "PAUSE"
     
-    def __init__(self, state_dir: Optional[Path] = None):
+    def __init__(self, state_dir: Optional[Path] = None, database=None):
         """
         Initialize state manager.
         
         Args:
             state_dir: Directory for state files (default: .state)
+            database: Optional MusicDatabase instance for coordination
         """
         self.state_dir = Path(state_dir) if state_dir else self.STATE_DIR
         self.state_file = self.state_dir / self.STATE_FILE
         self.pause_signal_file = self.state_dir / self.PAUSE_SIGNAL_FILE
+        self.database = database
         
         # Create state directory
         self.state_dir.mkdir(parents=True, exist_ok=True)
@@ -376,7 +393,12 @@ class StateManager:
             self.save_state()
     
     def mark_completed(self):
-        """Mark session as completed."""
+        """
+        Mark session as completed.
+        
+        Note: Album-specific completion is tracked in the database via
+        processing_history records. This marks the overall session as complete.
+        """
         if self.session:
             self.session.completed_at = datetime.now().isoformat()
             self.save_state()
@@ -428,8 +450,44 @@ class StateManager:
         }
     
     def clear_state(self):
-        """Clear state file."""
+        """
+        Clear state file.
+        
+        Note: This only clears the session state file. Album data persists
+        in the database for long-term tracking and deduplication.
+        """
         if self.state_file.exists():
             self.state_file.unlink()
         self.session = None
+    
+    def sync_with_database(self):
+        """
+        Synchronize session state with database records.
+        
+        This method can be used to update the session state based on
+        database records, useful for resume operations.
+        """
+        if not self.database or not self.session:
+            return
+        
+        # Update album statuses based on database processing history
+        for album in self.session.albums:
+            # Check if album has successful conversion in database
+            history = self.database.get_processing_history(
+                album.album_path if hasattr(album, 'album_path') else album.album_name
+            )
+            
+            # Update status based on most recent successful operation
+            convert_history = [
+                h for h in history
+                if h.get('operation_type') == 'convert'
+            ]
+            
+            if convert_history:
+                latest = convert_history[0]  # Already sorted by date DESC
+                if latest.get('status') == 'success' and album.status != AlbumStatus.COMPLETED.value:
+                    album.status = AlbumStatus.COMPLETED.value
+                    album.completed_at = latest.get('processed_at')
+        
+        self.save_state()
 

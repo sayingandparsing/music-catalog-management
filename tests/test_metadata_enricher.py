@@ -192,14 +192,31 @@ class TestSearchMusicBrainz:
                         'release-list': [{'id': 'test-id'}]
                     }
                     
-                    # Mock detailed result
+                    # Mock detailed result with proper structure
                     mock_mb.get_release_by_id.return_value = {
                         'release': {
                             'artist-credit-phrase': 'Test Artist',
                             'title': 'Test Album',
                             'date': '2020-01-01',
-                            'label-info-list': [],
-                            'medium-list': []
+                            'label-info-list': [
+                                {
+                                    'label': {'name': 'Test Label'},
+                                    'catalog-number': 'CAT-001'
+                                }
+                            ],
+                            'medium-list': [
+                                {
+                                    'track-list': [
+                                        {
+                                            'position': '1',
+                                            'recording': {
+                                                'title': 'Test Track',
+                                                'length': '180000'
+                                            }
+                                        }
+                                    ]
+                                }
+                            ]
                         }
                     }
                     
@@ -246,6 +263,20 @@ class TestSearchDiscogs:
                     sources=['discogs'],
                     discogs_token='test_token'
                 )
+                
+                # Create a proper mock release object
+                mock_release = Mock()
+                mock_artist = Mock()
+                mock_artist.name = 'Test Artist'
+                mock_release.artists = [mock_artist]
+                mock_release.title = 'Test Album'
+                mock_release.year = 2020
+                mock_release.labels = []
+                mock_release.genres = []
+                mock_release.tracklist = []
+                
+                # Mock the search to return our mock release
+                mock_discogs.search.return_value = [mock_release]
                 enricher.discogs = mock_discogs
                 
                 with patch.object(enricher, '_rate_limit'):
@@ -254,6 +285,7 @@ class TestSearchDiscogs:
                     
                     assert metadata is not None
                     assert metadata['album'] == 'Test Album'
+                    assert metadata['artist'] == 'Test Artist'
     
     def test_search_discogs_no_client(self, mock_musicbrainz):
         """Test Discogs search when client is not initialized."""
@@ -425,34 +457,45 @@ class TestSearchAlbumMetadata:
     
     def test_search_tries_all_sources(self, mock_musicbrainz):
         """Test that search tries all configured sources."""
-        with patch('metadata_enricher.FLAC'):
-            enricher = MetadataEnricher(sources=['musicbrainz', 'discogs'])
-            enricher.discogs = Mock()
-            
-            album_info = {'artist': 'Test', 'album': 'Test'}
-            
-            with patch.object(enricher, '_search_musicbrainz', return_value=None):
-                with patch.object(enricher, '_search_discogs', return_value={'album': 'Test'}):
-                    metadata = enricher._search_album_metadata(album_info)
+        with patch('metadata_enricher.mb'):
+            with patch('metadata_enricher.discogs_client'):
+                with patch('metadata_enricher.FLAC'):
+                    enricher = MetadataEnricher(sources=['musicbrainz'])  # Start with musicbrainz only
                     
-                    # Should find result from second source
-                    assert metadata is not None
-                    assert metadata['album'] == 'Test'
+                    album_info = {'artist': 'Test', 'album': 'Test'}
+                    
+                    with patch.object(enricher, '_search_musicbrainz', return_value=None):
+                        with patch.object(enricher, '_search_discogs', return_value={'album': 'Test'}):
+                            enricher.sources = ['musicbrainz', 'discogs']  # Now add discogs
+                            metadata = enricher._search_album_metadata(album_info)
+                            
+                            # Should find result from second source
+                            assert metadata is not None
+                            assert metadata['album'] == 'Test'
     
     def test_search_stops_on_first_result(self, mock_musicbrainz):
         """Test that search stops after first successful result."""
-        with patch('metadata_enricher.FLAC'):
-            enricher = MetadataEnricher(sources=['musicbrainz', 'discogs'])
-            
-            album_info = {'artist': 'Test', 'album': 'Test'}
-            
-            with patch.object(enricher, '_search_musicbrainz', return_value={'source': 'mb'}):
-                with patch.object(enricher, '_search_discogs', return_value={'source': 'discogs'}) as discogs_mock:
-                    metadata = enricher._search_album_metadata(album_info)
+        with patch('metadata_enricher.mb'):
+            with patch('metadata_enricher.discogs_client'):
+                with patch('metadata_enricher.FLAC'):
+                    enricher = MetadataEnricher(sources=['musicbrainz'])  # Start with musicbrainz only
                     
-                    # Should return first result and not call second source
-                    assert metadata['source'] == 'mb'
-                    discogs_mock.assert_not_called()
+                    album_info = {'artist': 'Test', 'album': 'Test'}
+                    
+                    # Mock musicbrainz to return metadata with identifiable content
+                    mb_metadata = {'artist': 'Test', 'album': 'Test', 'label': 'MB Label'}
+                    discogs_metadata = {'artist': 'Test', 'album': 'Test', 'label': 'Discogs Label'}
+                    
+                    with patch.object(enricher, '_search_musicbrainz', return_value=mb_metadata) as mb_mock:
+                        with patch.object(enricher, '_search_discogs', return_value=discogs_metadata) as discogs_mock:
+                            enricher.sources = ['musicbrainz', 'discogs']  # Now add discogs
+                            metadata = enricher._search_album_metadata(album_info)
+                            
+                            # Should return first result and not call second source
+                            assert metadata is not None
+                            assert metadata == mb_metadata  # Should be the MusicBrainz result
+                            mb_mock.assert_called_once()
+                            discogs_mock.assert_not_called()
 
 
 @pytest.mark.integration

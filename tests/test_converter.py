@@ -84,7 +84,7 @@ class TestConvertFile:
         input_path = temp_dir / "nonexistent.dsf"
         output_path = temp_dir / "output.flac"
         
-        success, error, duration = converter.convert_file(input_path, output_path)
+        success, error, duration, dynamic_range = converter.convert_file(input_path, output_path)
         
         assert success is False
         assert "Input file not found" in error
@@ -100,7 +100,7 @@ class TestConvertFile:
         input_path.write_text("mock input")
         output_path.write_text("existing output")
         
-        success, error, duration = converter.convert_file(
+        success, error, duration, dynamic_range = converter.convert_file(
             input_path, output_path, overwrite=False
         )
         
@@ -116,7 +116,7 @@ class TestConvertFile:
         
         input_path.write_text("mock mp3")
         
-        success, error, duration = converter.convert_file(input_path, output_path)
+        success, error, duration, dynamic_range = converter.convert_file(input_path, output_path)
         
         assert success is False
         assert "Unsupported input format" in error
@@ -130,58 +130,69 @@ class TestConvertFile:
         
         input_path.write_text("mock input")
         
-        # Mock successful conversion
+        # Mock successful conversion - output file exists after conversion
         with patch.object(converter, '_convert_dsf_to_flac', return_value=(True, None)):
-            with patch.object(Path, 'exists', return_value=True):
-                success, error, duration = converter.convert_file(input_path, output_path)
+            success, error, duration, dynamic_range = converter.convert_file(input_path, output_path)
         
-        # Output directory should be created
+        # Output directory should be created by convert_file before calling _convert_dsf_to_flac
         assert output_path.parent.exists()
     
     def test_convert_dsf_to_flac_mode(self, mock_ffmpeg_available, temp_dir):
         """Test DSF to FLAC conversion mode."""
-        converter = AudioConverter(mode="iso_dsf_to_flac")
+        converter = AudioConverter(mode="iso_dsf_to_flac", calculate_dynamic_range=False)
         
         input_path = temp_dir / "track.dsf"
         output_path = temp_dir / "track.flac"
         
         input_path.write_text("mock dsf")
         
-        with patch.object(converter, '_convert_dsf_to_flac', return_value=(True, None)) as mock_convert:
-            with patch.object(Path, 'exists', return_value=True):
-                success, error, duration = converter.convert_file(input_path, output_path)
+        def create_output_file(*args, **kwargs):
+            # Create output file when _convert_dsf_to_flac is called
+            output_path.write_text("mock flac")
+            return (True, None)
+        
+        with patch.object(converter, '_convert_dsf_to_flac', side_effect=create_output_file) as mock_convert:
+            success, error, duration, dynamic_range = converter.convert_file(input_path, output_path)
         
         assert success is True
         mock_convert.assert_called_once_with(input_path, output_path)
     
     def test_convert_iso_to_flac_mode(self, mock_ffmpeg_available, temp_dir):
         """Test ISO to FLAC conversion mode."""
-        converter = AudioConverter(mode="iso_dsf_to_flac")
+        converter = AudioConverter(mode="iso_dsf_to_flac", calculate_dynamic_range=False)
         
         input_path = temp_dir / "track.iso"
         output_path = temp_dir / "track.flac"
         
         input_path.write_text("mock iso")
         
-        with patch.object(converter, '_convert_iso_to_flac', return_value=(True, None)) as mock_convert:
-            with patch.object(Path, 'exists', return_value=True):
-                success, error, duration = converter.convert_file(input_path, output_path)
+        def create_output_file(*args, **kwargs):
+            # Create output file when _convert_iso_to_flac is called
+            output_path.write_text("mock flac")
+            return (True, None)
+        
+        with patch.object(converter, '_convert_iso_to_flac', side_effect=create_output_file) as mock_convert:
+            success, error, duration, dynamic_range = converter.convert_file(input_path, output_path)
         
         assert success is True
         mock_convert.assert_called_once_with(input_path, output_path)
     
     def test_convert_iso_to_dsf_mode(self, mock_ffmpeg_available, temp_dir):
         """Test ISO to DSF conversion mode."""
-        converter = AudioConverter(mode="iso_to_dsf")
+        converter = AudioConverter(mode="iso_to_dsf", calculate_dynamic_range=False)
         
         input_path = temp_dir / "track.iso"
         output_path = temp_dir / "track.dsf"
         
         input_path.write_text("mock iso")
         
-        with patch.object(converter, '_convert_iso_to_dsf', return_value=(True, None)) as mock_convert:
-            with patch.object(Path, 'exists', return_value=True):
-                success, error, duration = converter.convert_file(input_path, output_path)
+        def create_output_file(*args, **kwargs):
+            # Create output file when _convert_iso_to_dsf is called
+            output_path.write_text("mock dsf")
+            return (True, None)
+        
+        with patch.object(converter, '_convert_iso_to_dsf', side_effect=create_output_file) as mock_convert:
+            success, error, duration, dynamic_range = converter.convert_file(input_path, output_path)
         
         assert success is True
         mock_convert.assert_called_once_with(input_path, output_path)
@@ -196,7 +207,7 @@ class TestConvertFile:
         
         input_path.write_text("mock")
         
-        success, error, duration = converter.convert_file(input_path, output_path)
+        success, error, duration, dynamic_range = converter.convert_file(input_path, output_path)
         
         assert success is False
         assert "Unknown conversion mode" in error
@@ -212,7 +223,7 @@ class TestConvertFile:
         
         with patch.object(converter, '_convert_dsf_to_flac', return_value=(True, None)):
             with patch.object(Path, 'exists', return_value=True):
-                success, error, duration = converter.convert_file(input_path, output_path)
+                success, error, duration, dynamic_range = converter.convert_file(input_path, output_path)
         
         assert duration >= 0.0  # Should have a duration
 
@@ -248,7 +259,8 @@ class TestDSFToFLACConversion:
             assert str(input_path) in cmd
             assert str(output_path) in cmd
             assert '-sample_fmt' in cmd
-            assert 's24' in cmd
+            # Note: For 24-bit output, converter uses s32 format (FLAC handles 24-bit internally)
+            assert 's32' in cmd
             assert '-ar' in cmd
             assert '88200' in cmd
     
@@ -319,37 +331,40 @@ class TestISOConversion:
     """Tests for ISO conversion methods."""
     
     def test_iso_to_flac_command_generation(self, mock_ffmpeg_available, temp_dir):
-        """Test ISO to FLAC command generation."""
+        """Test ISO to FLAC conversion flow."""
         converter = AudioConverter()
         
         input_path = temp_dir / "input.iso"
         output_path = temp_dir / "output.flac"
         
-        with patch.object(converter, '_run_ffmpeg', return_value=(True, None)) as mock_run:
-            converter._convert_iso_to_flac(input_path, output_path)
-            
-            cmd = mock_run.call_args[0][0]
-            
-            # Should map first audio stream
-            assert '-map' in cmd
-            assert '0:a:0' in cmd
+        # Mock the extraction to return a fake DSF file
+        extracted_dsf = temp_dir / "extracted.dsf"
+        extracted_dsf.write_text("mock dsf content")
+        
+        with patch.object(converter, '_extract_iso_to_dsf', return_value=(True, None, [extracted_dsf])):
+            with patch.object(converter, '_convert_dsf_to_flac', return_value=(True, None)) as mock_convert:
+                converter._convert_iso_to_flac(input_path, output_path)
+                
+                # Should call DSF to FLAC conversion on extracted file
+                assert mock_convert.called
     
     def test_iso_to_dsf_command_generation(self, mock_ffmpeg_available, temp_dir):
-        """Test ISO to DSF command generation."""
+        """Test ISO to DSF conversion flow."""
         converter = AudioConverter()
         
         input_path = temp_dir / "input.iso"
         output_path = temp_dir / "output.dsf"
         
-        with patch.object(converter, '_run_ffmpeg', return_value=(True, None)) as mock_run:
-            converter._convert_iso_to_dsf(input_path, output_path)
+        # Mock the extraction to return a fake DSF file
+        extracted_dsf = temp_dir / "extracted.dsf"
+        extracted_dsf.write_text("mock dsf content")
+        
+        with patch.object(converter, '_extract_iso_to_dsf', return_value=(True, None, [extracted_dsf])):
+            success, error = converter._convert_iso_to_dsf(input_path, output_path)
             
-            cmd = mock_run.call_args[0][0]
-            cmd_str = ' '.join(cmd)
-            
-            # Should use DSD codec
-            assert '-c:a' in cmd
-            assert 'dsd_lsbf_planar' in cmd
+            # Should succeed and output file should exist
+            assert success is True
+            assert output_path.exists()
 
 
 class TestFFmpegExecution:

@@ -91,7 +91,7 @@ class TestFullWorkflow:
                 mode='iso_dsf_to_flac'
             )
             
-            success, error, duration = converter.convert_file(
+            success, error, duration, dynamic_range = converter.convert_file(
                 first_file.path,
                 output_file
             )

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 import time
 import re
+import uuid
 
 try:
     import musicbrainzngs as mb
@@ -35,7 +36,8 @@ class MetadataEnricher:
         self,
         sources: Optional[List[str]] = None,
         discogs_token: Optional[str] = None,
-        behavior: str = "fill_missing"
+        behavior: str = "fill_missing",
+        database=None
     ):
         """
         Initialize metadata enricher.
@@ -44,10 +46,12 @@ class MetadataEnricher:
             sources: List of sources to use ('musicbrainz', 'discogs')
             discogs_token: Discogs API user token
             behavior: 'fill_missing' or 'overwrite'
+            database: MusicDatabase instance (optional, for storing candidates)
         """
         self.sources = sources or ['musicbrainz', 'discogs']
         self.discogs_token = discogs_token
         self.behavior = behavior
+        self.database = database
         
         # Initialize MusicBrainz
         if 'musicbrainz' in self.sources:
@@ -86,7 +90,8 @@ class MetadataEnricher:
     def enrich_album(
         self,
         album_path: Path,
-        music_files: List[Path]
+        music_files: List[Path],
+        album_id: Optional[str] = None
     ) -> tuple[bool, Optional[str]]:
         """
         Enrich metadata for all files in an album.
@@ -94,6 +99,7 @@ class MetadataEnricher:
         Args:
             album_path: Path to album directory
             music_files: List of music file paths
+            album_id: Optional album UUID for database storage
             
         Returns:
             Tuple of (success, error_message)
@@ -102,8 +108,11 @@ class MetadataEnricher:
             # Extract album info from path or existing files
             album_info = self._extract_album_info(album_path, music_files)
             
-            # Search for album metadata
-            metadata = self._search_album_metadata(album_info)
+            # Search for album metadata and candidates
+            metadata, all_candidates = self._search_album_metadata_with_candidates(
+                album_info,
+                album_id
+            )
             
             if not metadata:
                 return False, "No metadata found for album"
@@ -179,6 +188,42 @@ class MetadataEnricher:
         
         return info
     
+    def _search_album_metadata_with_candidates(
+        self,
+        album_info: Dict[str, Any],
+        album_id: Optional[str] = None
+    ) -> tuple[Optional[Dict[str, Any]], List[Dict[str, Any]]]:
+        """
+        Search for album metadata and collect all candidates from configured sources.
+        
+        Args:
+            album_info: Album information for search
+            album_id: Optional album UUID for database storage
+            
+        Returns:
+            Tuple of (best_metadata, all_candidates_list)
+        """
+        best_metadata = None
+        all_candidates = []
+        
+        for source in self.sources:
+            if source == 'musicbrainz':
+                candidates = self._search_musicbrainz_candidates(album_info, limit=5)
+                all_candidates.extend(candidates)
+                if not best_metadata and candidates:
+                    best_metadata = candidates[0]['metadata']
+            elif source == 'discogs' and self.discogs:
+                candidates = self._search_discogs_candidates(album_info, limit=5)
+                all_candidates.extend(candidates)
+                if not best_metadata and candidates:
+                    best_metadata = candidates[0]['metadata']
+        
+        # Store candidates in database if available
+        if self.database and album_id and all_candidates:
+            self._store_metadata_candidates(album_id, all_candidates)
+        
+        return best_metadata, all_candidates
+    
     def _search_album_metadata(
         self,
         album_info: Dict[str, Any]
@@ -192,17 +237,107 @@ class MetadataEnricher:
         Returns:
             Metadata dictionary or None
         """
-        for source in self.sources:
-            if source == 'musicbrainz':
-                metadata = self._search_musicbrainz(album_info)
-                if metadata:
-                    return metadata
-            elif source == 'discogs' and self.discogs:
-                metadata = self._search_discogs(album_info)
-                if metadata:
-                    return metadata
+        metadata, _ = self._search_album_metadata_with_candidates(album_info)
+        return metadata
+    
+    def _search_musicbrainz_candidates(
+        self,
+        album_info: Dict[str, Any],
+        limit: int = 5
+    ) -> List[Dict[str, Any]]:
+        """
+        Search MusicBrainz for album metadata candidates.
         
-        return None
+        Args:
+            album_info: Album information
+            limit: Maximum number of candidates to return
+            
+        Returns:
+            List of candidate dictionaries with metadata and source info
+        """
+        candidates = []
+        
+        try:
+            self._rate_limit()
+            
+            artist = album_info.get('artist', '')
+            album = album_info.get('album', '')
+            
+            if not artist or not album:
+                return candidates
+            
+            # Search for releases
+            result = mb.search_releases(
+                artist=artist,
+                release=album,
+                limit=limit
+            )
+            
+            if not result.get('release-list'):
+                return candidates
+            
+            # Process each result
+            for rank, release in enumerate(result['release-list'][:limit], 1):
+                release_id = release['id']
+                
+                # Get detailed release info
+                self._rate_limit()
+                try:
+                    detailed = mb.get_release_by_id(
+                        release_id,
+                        includes=['artists', 'recordings', 'labels']
+                    )
+                    
+                    release_data = detailed['release']
+                    
+                    # Extract metadata
+                    metadata = {
+                        'artist': release_data['artist-credit-phrase'],
+                        'album': release_data['title'],
+                        'date': release_data.get('date', ''),
+                        'label': None,
+                        'catalog_number': None,
+                        'tracks': []
+                    }
+                    
+                    # Extract label info
+                    if 'label-info-list' in release_data and release_data['label-info-list']:
+                        label_info = release_data['label-info-list'][0]
+                        if 'label' in label_info:
+                            metadata['label'] = label_info['label'].get('name')
+                        metadata['catalog_number'] = label_info.get('catalog-number')
+                    
+                    # Extract track info
+                    if 'medium-list' in release_data:
+                        for medium in release_data['medium-list']:
+                            if 'track-list' in medium:
+                                for track in medium['track-list']:
+                                    recording = track['recording']
+                                    metadata['tracks'].append({
+                                        'number': track['position'],
+                                        'title': recording['title'],
+                                        'length': recording.get('length')
+                                    })
+                    
+                    # Calculate confidence score (simplified)
+                    confidence = 1.0 - (rank - 1) * 0.15
+                    
+                    candidates.append({
+                        'source': 'musicbrainz',
+                        'source_id': release_id,
+                        'rank': rank,
+                        'confidence_score': max(0.1, confidence),
+                        'metadata': metadata
+                    })
+                
+                except Exception as e:
+                    print(f"Error fetching MusicBrainz release {release_id}: {e}")
+                    continue
+        
+        except Exception as e:
+            print(f"MusicBrainz search error: {e}")
+        
+        return candidates
     
     def _search_musicbrainz(
         self,
@@ -281,8 +416,89 @@ class MetadataEnricher:
             return metadata
             
         except Exception as e:
-            print(f"MusicBrainz search error: {e}")
+            print(f"MusicBrainz search error (legacy): {e}")
             return None
+    
+    def _search_discogs_candidates(
+        self,
+        album_info: Dict[str, Any],
+        limit: int = 5
+    ) -> List[Dict[str, Any]]:
+        """
+        Search Discogs for album metadata candidates.
+        
+        Args:
+            album_info: Album information
+            limit: Maximum number of candidates to return
+            
+        Returns:
+            List of candidate dictionaries with metadata and source info
+        """
+        candidates = []
+        
+        if not self.discogs:
+            return candidates
+        
+        try:
+            self._rate_limit()
+            
+            artist = album_info.get('artist', '')
+            album = album_info.get('album', '')
+            
+            if not artist or not album:
+                return candidates
+            
+            # Search for releases
+            results = self.discogs.search(
+                f"{artist} {album}",
+                type='release'
+            )
+            
+            if not results:
+                return candidates
+            
+            # Process each result
+            for rank, release in enumerate(results[:limit], 1):
+                try:
+                    # Extract metadata
+                    metadata = {
+                        'artist': release.artists[0].name if release.artists else artist,
+                        'album': release.title,
+                        'date': str(release.year) if hasattr(release, 'year') else '',
+                        'label': release.labels[0].name if release.labels else None,
+                        'catalog_number': release.labels[0].catno if release.labels else None,
+                        'genre': ', '.join(release.genres) if hasattr(release, 'genres') else None,
+                        'tracks': []
+                    }
+                    
+                    # Extract track info
+                    if hasattr(release, 'tracklist'):
+                        for track in release.tracklist:
+                            metadata['tracks'].append({
+                                'number': track.position,
+                                'title': track.title,
+                                'length': track.duration
+                            })
+                    
+                    # Calculate confidence score
+                    confidence = 1.0 - (rank - 1) * 0.15
+                    
+                    candidates.append({
+                        'source': 'discogs',
+                        'source_id': str(release.id),
+                        'rank': rank,
+                        'confidence_score': max(0.1, confidence),
+                        'metadata': metadata
+                    })
+                
+                except Exception as e:
+                    print(f"Error processing Discogs release: {e}")
+                    continue
+        
+        except Exception as e:
+            print(f"Discogs search error: {e}")
+        
+        return candidates
     
     def _search_discogs(
         self,
@@ -344,7 +560,7 @@ class MetadataEnricher:
             return metadata
             
         except Exception as e:
-            print(f"Discogs search error: {e}")
+            print(f"Discogs search error (legacy): {e}")
             return None
     
     def _apply_metadata_to_flac(
@@ -445,4 +661,41 @@ class MetadataEnricher:
             time.sleep(self.min_api_interval - time_since_last)
         
         self.last_api_call = time.time()
+    
+    def _store_metadata_candidates(
+        self,
+        album_id: str,
+        candidates: List[Dict[str, Any]]
+    ) -> bool:
+        """
+        Store metadata candidates in database.
+        
+        Args:
+            album_id: Album UUID
+            candidates: List of candidate dictionaries
+            
+        Returns:
+            True if successful
+        """
+        if not self.database:
+            return False
+        
+        try:
+            for candidate in candidates:
+                candidate_id = str(uuid.uuid4())
+                
+                self.database.create_metadata_candidate(
+                    candidate_id=candidate_id,
+                    album_id=album_id,
+                    source=candidate['source'],
+                    source_id=candidate['source_id'],
+                    rank=candidate['rank'],
+                    metadata_dict=candidate['metadata'],
+                    confidence_score=candidate.get('confidence_score')
+                )
+            
+            return True
+        except Exception as e:
+            print(f"Error storing metadata candidates: {e}")
+            return False
 

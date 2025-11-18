@@ -42,3 +42,15 @@ Thumbs.db
 # Config overrides
 config.local.yaml
 
+# Music/Audio files (test fixtures should use TEST_ALBUM_PATH instead)
+*.dsf
+*.dff
+*.iso
+*.flac
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.dsd
+*.sacd
+

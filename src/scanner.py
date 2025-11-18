@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import List, Set, Dict, Optional
 from dataclasses import dataclass, field
 
+from src.album_metadata import AlbumMetadata
+
 
 @dataclass
 class MusicFile:
@@ -38,6 +40,9 @@ class Album:
     music_files: List[MusicFile] = field(default_factory=list)
     non_music_files: List[NonMusicFile] = field(default_factory=list)
     subdirectories: List[str] = field(default_factory=list)
+    album_id: Optional[str] = None
+    already_processed: bool = False
+    audio_checksum: Optional[str] = None
     
     @property
     def total_size(self) -> int:
@@ -66,7 +71,8 @@ class DirectoryScanner:
     def __init__(
         self,
         music_extensions: Optional[List[str]] = None,
-        copy_extensions: Optional[List[str]] = None
+        copy_extensions: Optional[List[str]] = None,
+        check_metadata: bool = True
     ):
         """
         Initialize scanner.
@@ -74,6 +80,7 @@ class DirectoryScanner:
         Args:
             music_extensions: File extensions for music files (e.g., ['.iso', '.dsf'])
             copy_extensions: File extensions for non-music files to copy
+            check_metadata: Whether to check for .album_metadata files
         """
         self.music_extensions = set(
             ext.lower() for ext in (music_extensions or ['.iso', '.dsf', '.dff'])
@@ -84,13 +91,16 @@ class DirectoryScanner:
                 '.log', '.cue', '.m3u', '.nfo'
             ])
         )
+        self.check_metadata = check_metadata
     
-    def scan(self, root_dir: Path) -> List[Album]:
+    def scan(self, root_dir: Path, single_album: bool = False) -> List[Album]:
         """
         Scan directory for albums.
         
         Args:
             root_dir: Root directory to scan
+            single_album: If True, treat root_dir as a single album directory.
+                         If False, treat subdirectories as albums.
             
         Returns:
             List of Album objects
@@ -103,13 +113,13 @@ class DirectoryScanner:
         
         albums = []
         
-        # Check if root_dir itself is an album
-        if self._is_album(root_dir):
+        if single_album:
+            # Treat root_dir as a single album
             album = self._scan_album(root_dir, root_dir)
             if album.file_count > 0:
                 albums.append(album)
         else:
-            # Scan subdirectories for albums
+            # Default: scan subdirectories as albums
             albums.extend(self._scan_for_albums(root_dir))
         
         return albums
@@ -208,12 +218,30 @@ class DirectoryScanner:
                         extension=extension
                     ))
         
+        # Check for album metadata file
+        album_id = None
+        already_processed = False
+        audio_checksum = None
+        
+        if self.check_metadata:
+            metadata = AlbumMetadata(album_path)
+            if metadata.exists():
+                metadata_dict = metadata.read()
+                if metadata_dict:
+                    album_id = metadata_dict.get('album_id')
+                    audio_checksum = metadata_dict.get('audio_checksum')
+                    # Don't mark as processed here - let deduplication manager decide
+                    # based on database status
+        
         return Album(
             root_path=album_path,
             name=album_path.name,
             music_files=sorted(music_files, key=lambda x: str(x.path)),
             non_music_files=sorted(non_music_files, key=lambda x: str(x.path)),
-            subdirectories=sorted(list(subdirs))
+            subdirectories=sorted(list(subdirs)),
+            album_id=album_id,
+            already_processed=already_processed,
+            audio_checksum=audio_checksum
         )
     
     def get_statistics(self, albums: List[Album]) -> Dict:

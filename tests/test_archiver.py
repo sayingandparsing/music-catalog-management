@@ -237,8 +237,9 @@ class TestArchiveManagement:
         # Create multiple archives
         success1, archive_path1, _ = archiver.archive_album(sample_album_structure)
         
-        # Wait a moment to ensure different timestamp
-        time.sleep(0.1)
+        # Wait at least 1 second to ensure different timestamp in archive name
+        # (timestamp format is YYYYMMDD_HHMMSS, so we need >1 second difference)
+        time.sleep(1.1)
         
         success2, archive_path2, _ = archiver.archive_album(sample_album_structure)
         

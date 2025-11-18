@@ -5,6 +5,7 @@ A robust Python CLI utility for converting DSD audio files (ISO/DSF) to FLAC or 
 ## Features
 
 - **Multiple Conversion Modes**: Convert ISO/DSF to FLAC or ISO to DSF
+- **SACD ISO Support**: Automatically extracts DSD audio from SACD ISO images using `sacd_extract`
 - **High-Quality Audio Processing**: Uses SoX resampler with precision=28, triangular dithering, and 40kHz lowpass filter
 - **Crash Recovery**: Automatically resume from where you left off if interrupted
 - **Pause/Resume**: Pause conversion between albums and resume later
@@ -34,6 +35,11 @@ A robust Python CLI utility for converting DSD audio files (ISO/DSF) to FLAC or 
   sudo dnf install ffmpeg
   ```
 
+- **sacd_extract**: Required for SACD ISO file processing
+  - Extracts DSD audio from SACD ISO images
+  - See [INSTALL_SACD_EXTRACT.md](INSTALL_SACD_EXTRACT.md) for installation instructions
+  - **Note**: If `sacd_extract` is not installed, the converter will only process DSF/DFF files and skip ISO files
+
 ### Python Dependencies
 
 All Python dependencies are listed in `requirements.txt` and can be installed via pip.
@@ -53,6 +59,15 @@ All Python dependencies are listed in `requirements.txt` and can be installed vi
 3. Verify ffmpeg is installed:
    ```bash
    ffmpeg -version
+   ```
+
+4. **(Optional)** Install sacd_extract for ISO file support:
+   ```bash
+   # See INSTALL_SACD_EXTRACT.md for detailed instructions
+   ./install_sacd_extract.sh
+   
+   # Or verify if already installed
+   sacd_extract --help
    ```
 
 ## Quick Start
@@ -183,11 +198,15 @@ python src/main.py ~/Music/DSD \
 
 ### Example 3: ISO to DSF Conversion
 
+Convert SACD ISO files to DSF format (requires `sacd_extract`):
+
 ```bash
 python src/main.py ~/Music/SACD_ISO \
   --archive ~/Music/Archive \
   --mode iso_to_dsf
 ```
+
+**Note**: The converter automatically extracts DSD audio from ISO files before conversion.
 
 ### Example 4: With Metadata Enrichment
 
@@ -434,6 +453,29 @@ Error: ffmpeg not found. Please install ffmpeg to use this tool.
 
 **Solution**: Install ffmpeg (see Requirements section)
 
+### sacd_extract Not Found (ISO files fail)
+
+```
+ERROR: sacd_extract not found. Install it to process ISO files.
+```
+
+**Solution**: 
+1. Install sacd_extract following instructions in [INSTALL_SACD_EXTRACT.md](INSTALL_SACD_EXTRACT.md)
+2. Run `./install_sacd_extract.sh` for guided installation
+3. Verify with `which sacd_extract`
+
+### ISO File: "Invalid data found when processing input"
+
+This error occurs when trying to convert SACD ISO files without `sacd_extract`:
+
+**Solution**: 
+- Install `sacd_extract` (see above)
+- The converter now automatically extracts ISO files before conversion
+- Alternatively, manually extract ISOs first:
+  ```bash
+  sacd_extract -i input.iso -s -c -p output_dir/
+  ```
+
 ### Archive Directory Required
 
 ```
@@ -471,6 +513,42 @@ pip install python-musicbrainzngs python3-discogs-client
 ```
 
 ## Advanced Usage
+
+### SACD ISO File Processing
+
+When the converter encounters SACD ISO files, it automatically:
+
+1. **Extracts DSD audio** using `sacd_extract` to a temporary directory
+2. **Converts extracted DSF files** to FLAC (or copies to DSF in iso_to_dsf mode)
+3. **Cleans up temporary files** automatically after conversion
+
+**ISO Extraction Details:**
+- Extracts stereo tracks by default
+- Supports multi-track ISOs (each track converted separately)
+- Uses temporary storage (cleaned up automatically)
+- Extraction typically takes 30-60 seconds per ISO
+
+**Example workflow for an ISO file:**
+```
+Input: Charles Mingus - Album.iso (1.6 GB)
+  ↓
+Step 1: Extract to temp directory
+  → Creates: track_01.dsf, track_02.dsf, etc.
+  ↓
+Step 2: Convert each DSF to FLAC
+  → track_01.dsf → track_01.flac
+  → track_02.dsf → track_02.flac
+  ↓
+Step 3: Clean up temp files
+  → Removes temporary DSF files
+  ↓
+Output: track_01.flac, track_02.flac (800 MB total)
+```
+
+**Requirements:**
+- `sacd_extract` must be installed and in PATH
+- If not installed, ISO files will be skipped with an error message
+- DSF and DFF files are processed directly without extraction
 
 ### Audio Quality Settings
 
@@ -594,6 +672,13 @@ For issues and questions:
 3. Open an issue with detailed information
 
 ## Changelog
+
+### Version 1.1.0
+- **SACD ISO Support**: Integrated automatic ISO extraction using `sacd_extract`
+- ISO files are now automatically extracted to DSF before conversion
+- Temporary files are automatically cleaned up
+- Better error messages for ISO-related issues
+- Added installation guide and helper script for `sacd_extract`
 
 ### Version 1.0.0
 - Initial release

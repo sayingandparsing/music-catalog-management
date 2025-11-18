@@ -113,9 +113,9 @@ def sample_album_structure(temp_input_dir) -> Path:
     album_path = temp_input_dir / "Test Artist - Test Album"
     album_path.mkdir(parents=True, exist_ok=True)
     
-    # Create mock music files (empty files for unit tests)
-    (album_path / "01 - Track One.dsf").write_text("mock dsf content")
-    (album_path / "02 - Track Two.dsf").write_text("mock dsf content")
+    # Create mock music files with DIFFERENT content for checksum testing
+    (album_path / "01 - Track One.dsf").write_text("mock dsf content for track one")
+    (album_path / "02 - Track Two.dsf").write_text("mock dsf content for track two")
     
     # Create non-music files
     (album_path / "cover.jpg").write_bytes(b"\xff\xd8\xff\xe0")  # JPEG header
@@ -337,6 +337,28 @@ def temp_log_files(temp_dir) -> tuple[Path, Path]:
     log_file = temp_dir / "test.log"
     error_log_file = temp_dir / "test_errors.log"
     return log_file, error_log_file
+
+
+# ============================================================================
+# Database Fixtures
+# ============================================================================
+
+@pytest.fixture
+def temp_db():
+    """Create a temporary database for testing."""
+    with tempfile.NamedTemporaryFile(suffix='.duckdb', delete=False) as f:
+        db_path = Path(f.name)
+    
+    # Delete the file so DuckDB can create it fresh
+    db_path.unlink()
+    
+    from src.database import MusicDatabase
+    db = MusicDatabase(db_path)
+    yield db
+    
+    db.close()
+    if db_path.exists():
+        db_path.unlink()
 
 
 # ============================================================================

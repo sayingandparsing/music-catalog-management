@@ -10,13 +10,17 @@ from typing import Optional
 import click
 from datetime import datetime, timedelta
 
-from config import Config
-from logger import setup_logger, ConversionLogger
-from scanner import DirectoryScanner, Album
-from archiver import Archiver
-from converter import AudioConverter
-from state_manager import StateManager, AlbumStatus
-from metadata_enricher import MetadataEnricher
+from src.config import Config
+from src.logger import setup_logger, ConversionLogger
+from src.scanner import DirectoryScanner, Album
+from src.archiver import Archiver
+from src.converter import AudioConverter
+from src.state_manager import StateManager, AlbumStatus
+from src.metadata_enricher import MetadataEnricher
+from src.database import MusicDatabase
+from src.album_metadata import AlbumMetadata
+from src.deduplication import DeduplicationManager
+import uuid
 
 
 class ConversionOrchestrator:
@@ -30,7 +34,8 @@ class ConversionOrchestrator:
         config: Config,
         logger: ConversionLogger,
         dry_run: bool = False,
-        resume: bool = False
+        resume: bool = False,
+        single_album: bool = False
     ):
         """
         Initialize orchestrator.
@@ -40,11 +45,13 @@ class ConversionOrchestrator:
             logger: Logger instance
             dry_run: If True, don't perform actual conversions
             resume: If True, resume from previous session
+            single_album: If True, treat input as single album directory
         """
         self.config = config
         self.logger = logger
         self.dry_run = dry_run
         self.resume = resume
+        self.single_album = single_album
         
         # Initialize components
         self.scanner = DirectoryScanner(
@@ -65,10 +72,28 @@ class ConversionOrchestrator:
             lowpass_freq=config.get('conversion.audio_filter.lowpass_freq', 40000),
             flac_compression_level=config.get('conversion.flac_compression_level', 8),
             preserve_metadata=config.get('conversion.preserve_metadata', True),
-            ffmpeg_threads=config.get('processing.ffmpeg_threads', 0)
+            ffmpeg_threads=config.get('processing.ffmpeg_threads', 0),
+            calculate_dynamic_range=config.get('processing.calculate_dynamic_range', True),
+            flac_standardization_enabled=config.get('conversion.flac_standardization.enabled', False),
+            flac_higher_quality_behavior=config.get('conversion.flac_standardization.higher_quality_behavior', 'skip')
         )
         
         self.state_manager = StateManager()
+        
+        # Initialize database if enabled
+        self.database = None
+        self.dedup_manager = None
+        if config.get('database.enabled'):
+            try:
+                db_path = Path(config.get('database.path', './music_catalog.duckdb'))
+                self.database = MusicDatabase(db_path)
+                self.dedup_manager = DeduplicationManager(
+                    database=self.database,
+                    verify_checksums=config.get('processing.verify_checksums', True)
+                )
+                self.logger.info(f"Database initialized: {db_path}")
+            except Exception as e:
+                self.logger.warning(f"Database initialization failed: {e}")
         
         # Optional metadata enricher
         self.metadata_enricher = None
@@ -77,7 +102,8 @@ class ConversionOrchestrator:
                 self.metadata_enricher = MetadataEnricher(
                     sources=config.get('metadata.sources'),
                     discogs_token=config.get('metadata.discogs.user_token'),
-                    behavior=config.get('metadata.behavior')
+                    behavior=config.get('metadata.behavior'),
+                    database=self.database
                 )
             except ImportError as e:
                 self.logger.warning(f"Metadata enrichment disabled: {e}")
@@ -86,11 +112,15 @@ class ConversionOrchestrator:
         self.stats = {
             'albums_processed': 0,
             'albums_skipped': 0,
+            'albums_already_processed': 0,
             'files_converted': 0,
             'files_failed': 0,
             'start_time': None,
             'end_time': None
         }
+        
+        # Skip processed flag
+        self.skip_processed = config.get('processing.skip_processed', True)
     
     def run(self, input_dir: Path) -> bool:
         """
@@ -140,6 +170,10 @@ class ConversionOrchestrator:
             
             self.logger.log_conversion_end(success, self.stats)
             
+            # Close database connection
+            if self.database:
+                self.database.close()
+            
             return success
             
         except KeyboardInterrupt:
@@ -158,7 +192,7 @@ class ConversionOrchestrator:
     ) -> list[Album]:
         """Scan directory and initialize session."""
         self.logger.info(f"Scanning directory: {input_dir}")
-        albums = self.scanner.scan(input_dir)
+        albums = self.scanner.scan(input_dir, single_album=self.single_album)
         
         self.logger.info(f"Found {len(albums)} albums")
         self.scanner.print_summary(albums)
@@ -214,6 +248,18 @@ class ConversionOrchestrator:
                     self.logger.info("Remove .state/PAUSE file and use --resume to continue.")
                     break
             
+            # Check if album should be skipped (already processed)
+            if self.skip_processed and self.dedup_manager:
+                should_skip, reason = self.dedup_manager.should_skip_album(
+                    album.root_path,
+                    [f.path for f in album.music_files]
+                )
+                
+                if should_skip:
+                    self.logger.info(f"  Skipping album: {reason}")
+                    self.stats['albums_already_processed'] += 1
+                    continue
+            
             self.logger.log_album_start(album.root_path, idx, total_albums)
             
             success = self._process_album(album, output_dir)
@@ -241,6 +287,35 @@ class ConversionOrchestrator:
         """
         max_retries = self.config.get('processing.max_retries', 3)
         skip_on_error = self.config.get('processing.skip_album_on_error', True)
+        start_time = datetime.now()
+        
+        # Get or create album ID
+        audio_files = [f.path for f in album.music_files]
+        if self.dedup_manager:
+            album_id = self.dedup_manager.get_or_create_album_id(
+                album.root_path,
+                audio_files
+            )
+        else:
+            # Fallback if no dedup manager
+            album_id = album.album_id or str(uuid.uuid4())
+        
+        # Calculate audio checksum
+        audio_checksum = AlbumMetadata.calculate_audio_checksum(audio_files)
+        
+        # Create or update album record in database
+        if self.database:
+            db_album = self.database.get_album_by_id(album_id)
+            if not db_album:
+                self.database.create_album(
+                    album_id=album_id,
+                    album_name=album.name,
+                    source_path=str(album.root_path),
+                    audio_files_checksum=audio_checksum,
+                    conversion_mode=self.config.get('conversion.mode'),
+                    sample_rate=self.config.get('conversion.sample_rate'),
+                    bit_depth=self.config.get('conversion.bit_depth')
+                )
         
         try:
             # Update state
@@ -249,10 +324,21 @@ class ConversionOrchestrator:
                 AlbumStatus.ARCHIVING
             )
             
+            # Record operation start in database
+            if self.database:
+                self.database.add_processing_history(
+                    album_id=album_id,
+                    operation_type='archive',
+                    status='started'
+                )
+            
             # Step 1: Archive original files
+            archive_path = None
             if not self.dry_run:
                 self.logger.info("  Archiving original files...")
+                archive_start = datetime.now()
                 success, archive_path, error = self.archiver.archive_album(album.root_path)
+                archive_duration = (datetime.now() - archive_start).total_seconds()
                 
                 if not success:
                     self.logger.error(f"  Archive failed: {error}")
@@ -261,6 +347,17 @@ class ConversionOrchestrator:
                         AlbumStatus.FAILED,
                         error_message=error
                     )
+                    
+                    # Record failure in database
+                    if self.database:
+                        self.database.add_processing_history(
+                            album_id=album_id,
+                            operation_type='archive',
+                            status='failed',
+                            error_message=error,
+                            duration_seconds=archive_duration
+                        )
+                    
                     return False
                 
                 self.logger.info(f"  Archived to: {archive_path}")
@@ -269,15 +366,43 @@ class ConversionOrchestrator:
                     AlbumStatus.CONVERTING,
                     archive_path=archive_path
                 )
+                
+                # Update database with archive path
+                if self.database:
+                    self.database.update_album(
+                        album_id=album_id,
+                        archive_path=str(archive_path)
+                    )
+                    self.database.add_processing_history(
+                        album_id=album_id,
+                        operation_type='archive',
+                        status='success',
+                        duration_seconds=archive_duration
+                    )
+                
+                # Create metadata file in archive
+                AlbumMetadata.create_for_album(
+                    archive_path,
+                    [archive_path / mf.relative_path for mf in album.music_files]
+                )
             else:
                 self.logger.info("  [DRY RUN] Would archive files")
             
             # Step 2: Prepare output directory structure
             output_album_path = output_dir / album.root_path.name
             
+            # Record conversion start in database
+            if self.database:
+                self.database.add_processing_history(
+                    album_id=album_id,
+                    operation_type='convert',
+                    status='started'
+                )
+            
             # Step 3: Convert music files
             files_failed = 0
             files_converted = 0
+            conversion_start = datetime.now()
             
             for music_file in album.music_files:
                 # Determine output path
@@ -289,6 +414,13 @@ class ConversionOrchestrator:
                 elif self.config.get('conversion.mode') == 'iso_to_dsf':
                     output_file_path = output_file_path.with_suffix('.dsf')
                 
+                # Extract track number from filename if possible
+                import re
+                track_num = None
+                match = re.match(r'^(\d+)', music_file.path.stem)
+                if match:
+                    track_num = int(match.group(1))
+                
                 # Convert file with retries
                 success = False
                 for attempt in range(1, max_retries + 1):
@@ -299,7 +431,7 @@ class ConversionOrchestrator:
                     )
                     
                     if not self.dry_run:
-                        success, error, duration = self.converter.convert_file(
+                        success, error, duration, dynamic_range = self.converter.convert_file(
                             music_file.path,
                             output_file_path
                         )
@@ -317,6 +449,24 @@ class ConversionOrchestrator:
                                 'completed'
                             )
                             files_converted += 1
+                            
+                            # Store track info in database
+                            if self.database:
+                                track_id = str(uuid.uuid4())
+                                file_info = output_file_path.stat()
+                                
+                                self.database.create_track(
+                                    track_id=track_id,
+                                    album_id=album_id,
+                                    track_number=track_num if track_num else 0,
+                                    title=output_file_path.stem,
+                                    file_path=str(output_file_path),
+                                    file_size=file_info.st_size,
+                                    file_format=output_file_path.suffix.lower(),
+                                    dynamic_range_crest=dynamic_range.get('dynamic_range_crest') if dynamic_range else None,
+                                    dynamic_range_r128=dynamic_range.get('dynamic_range_r128') if dynamic_range else None
+                                )
+                            
                             break
                         else:
                             self.logger.warning(
@@ -344,6 +494,18 @@ class ConversionOrchestrator:
                         AlbumStatus.FAILED,
                         error_message="File conversion failed"
                     )
+                    
+                    # Record failure in database
+                    if self.database:
+                        conversion_duration = (datetime.now() - conversion_start).total_seconds()
+                        self.database.add_processing_history(
+                            album_id=album_id,
+                            operation_type='convert',
+                            status='failed',
+                            error_message="File conversion failed",
+                            duration_seconds=conversion_duration
+                        )
+                    
                     self.stats['files_failed'] += files_failed
                     self.stats['files_converted'] += files_converted
                     return False
@@ -362,19 +524,66 @@ class ConversionOrchestrator:
             else:
                 self.logger.info(f"  [DRY RUN] Would copy {len(album.non_music_files)} non-music files")
             
+            # Record conversion success in database
+            if self.database:
+                conversion_duration = (datetime.now() - conversion_start).total_seconds()
+                self.database.add_processing_history(
+                    album_id=album_id,
+                    operation_type='convert',
+                    status='success',
+                    duration_seconds=conversion_duration
+                )
+            
             # Step 5: Enrich metadata (optional)
             if self.metadata_enricher and not self.dry_run:
                 self.logger.info("  Enriching metadata...")
+                enrich_start = datetime.now()
                 converted_files = [
                     output_album_path / mf.relative_path.with_suffix('.flac')
                     for mf in album.music_files
                 ]
                 success, error = self.metadata_enricher.enrich_album(
                     output_album_path,
-                    [f for f in converted_files if f.exists()]
+                    [f for f in converted_files if f.exists()],
+                    album_id=album_id
                 )
+                enrich_duration = (datetime.now() - enrich_start).total_seconds()
+                
                 if not success:
                     self.logger.warning(f"  Metadata enrichment failed: {error}")
+                    if self.database:
+                        self.database.add_processing_history(
+                            album_id=album_id,
+                            operation_type='enrich',
+                            status='failed',
+                            error_message=error,
+                            duration_seconds=enrich_duration
+                        )
+                else:
+                    if self.database:
+                        self.database.add_processing_history(
+                            album_id=album_id,
+                            operation_type='enrich',
+                            status='success',
+                            duration_seconds=enrich_duration
+                        )
+            
+            # Update database with playback path
+            if self.database:
+                self.database.update_album(
+                    album_id=album_id,
+                    playback_path=str(output_album_path)
+                )
+            
+            # Create metadata file in playback directory
+            if not self.dry_run:
+                playback_audio_files = list(output_album_path.glob('*.flac'))
+                if playback_audio_files:
+                    AlbumMetadata.create_for_album(
+                        output_album_path,
+                        playback_audio_files,
+                        album_id=album_id
+                    )
             
             # Mark album as completed
             self.state_manager.update_album_status(
@@ -394,6 +603,18 @@ class ConversionOrchestrator:
                 AlbumStatus.FAILED,
                 error_message=str(e)
             )
+            
+            # Record failure in database
+            if self.database:
+                total_duration = (datetime.now() - start_time).total_seconds()
+                self.database.add_processing_history(
+                    album_id=album_id,
+                    operation_type='convert',
+                    status='failed',
+                    error_message=str(e),
+                    duration_seconds=total_duration
+                )
+            
             return False
 
 
@@ -421,6 +642,8 @@ class ConversionOrchestrator:
               help='Simulate conversion without actually converting')
 @click.option('--log-level', type=click.Choice(['DEBUG', 'INFO', 'WARNING', 'ERROR']),
               help='Logging level')
+@click.option('--single-album', is_flag=True,
+              help='Treat INPUT_DIR as a single album (preserves internal structure like CD1, CD2)')
 def main(
     input_dir: Path,
     output_dir: Optional[Path],
@@ -433,7 +656,8 @@ def main(
     resume: bool,
     pause: bool,
     dry_run: bool,
-    log_level: Optional[str]
+    log_level: Optional[str],
+    single_album: bool
 ):
     """
     DSD Music Converter - Convert ISO/DSF files to FLAC or DSF.
@@ -484,7 +708,8 @@ def main(
             config=config,
             logger=logger,
             dry_run=dry_run,
-            resume=resume
+            resume=resume,
+            single_album=single_album
         )
         
         success = orchestrator.run(input_dir)
