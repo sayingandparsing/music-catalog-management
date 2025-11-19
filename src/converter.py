@@ -178,8 +178,9 @@ class AudioConverter:
                 elif input_ext in ['.dsf', '.dff']:
                     success, error = self._convert_dsf_to_flac(input_path, output_path)
                 elif input_ext == '.flac':
-                    # FLAC file but standardization not enabled
-                    return False, "FLAC standardization is not enabled in config", 0.0, None
+                    # FLAC file but standardization not enabled - skip it
+                    duration = time.time() - start_time
+                    return True, "FLAC file skipped (standardization disabled)", duration, None
                 else:
                     return False, f"Unsupported input format: {input_ext}", 0.0, None
             
@@ -392,10 +393,10 @@ class AudioConverter:
             # -p: output directory
             cmd = [
                 'sacd_extract',
-                '-i', str(input_path),
+                '-i', str(input_path.resolve()),  # Use absolute path
                 '-s',  # stereo tracks
                 '-c',  # convert to DSF
-                '-p', str(temp_dir)
+                '-p', str(temp_dir.resolve())  # Use absolute path
             ]
             
             result = subprocess.run(

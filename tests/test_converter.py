@@ -341,7 +341,7 @@ class TestISOConversion:
         extracted_dsf = temp_dir / "extracted.dsf"
         extracted_dsf.write_text("mock dsf content")
         
-        with patch.object(converter, '_extract_iso_to_dsf', return_value=(True, None, [extracted_dsf])):
+        with patch.object(converter, '_extract_iso_to_dsf', return_value=(True, None, [extracted_dsf], None)):
             with patch.object(converter, '_convert_dsf_to_flac', return_value=(True, None)) as mock_convert:
                 converter._convert_iso_to_flac(input_path, output_path)
                 
@@ -359,7 +359,7 @@ class TestISOConversion:
         extracted_dsf = temp_dir / "extracted.dsf"
         extracted_dsf.write_text("mock dsf content")
         
-        with patch.object(converter, '_extract_iso_to_dsf', return_value=(True, None, [extracted_dsf])):
+        with patch.object(converter, '_extract_iso_to_dsf', return_value=(True, None, [extracted_dsf], None)):
             success, error = converter._convert_iso_to_dsf(input_path, output_path)
             
             # Should succeed and output file should exist
