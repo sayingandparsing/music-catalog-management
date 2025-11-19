@@ -467,6 +467,104 @@ class TestLoggingIntegration:
 
 
 @pytest.mark.integration
+class TestResumeWorkflow:
+    """Tests for resume functionality."""
+    
+    def test_resume_calculates_correct_output_path(
+        self,
+        temp_input_dir,
+        temp_output_dir,
+        temp_archive_dir,
+        temp_state_dir,
+        sample_config_dict
+    ):
+        """Test that resume correctly calculates output paths from original album path."""
+        # Create a mock album in input directory
+        album_dir = temp_input_dir / "Test Album"
+        album_dir.mkdir()
+        (album_dir / "track.dsf").write_text("mock dsf")
+        
+        # Update config
+        sample_config_dict['paths']['archive_dir'] = str(temp_archive_dir)
+        sample_config_dict['paths']['output_dir'] = str(temp_output_dir)
+        sample_config_dict['paths']['working_dir'] = str(temp_state_dir / "working")
+        
+        config = Config()
+        config.data = sample_config_dict
+        
+        logger = setup_logger()
+        
+        # Create orchestrator
+        orchestrator = ConversionOrchestrator(
+            config=config,
+            logger=logger,
+            dry_run=False
+        )
+        
+        # Mock the state to simulate a resume scenario
+        orchestrator.state_manager.create_session(
+            input_dir=temp_input_dir,
+            output_dir=temp_output_dir,
+            archive_dir=temp_archive_dir,
+            conversion_mode="iso_dsf_to_flac",
+            sample_rate=88200,
+            bit_depth=24,
+            enrich_metadata=False
+        )
+        
+        # Add album with working directories (simulating mid-conversion state)
+        working_source = temp_state_dir / "working" / "Test Album_source"
+        working_processed = temp_state_dir / "working" / "Test Album_processed"
+        working_source.mkdir(parents=True)
+        working_processed.mkdir(parents=True)
+        
+        # Create the file in working directory
+        (working_source / "track.dsf").write_text("mock dsf")
+        
+        orchestrator.state_manager.add_album(
+            album_path=album_dir,
+            album_name="Test Album",
+            music_files=[(album_dir / "track.dsf", Path("track.dsf"))]
+        )
+        
+        orchestrator.state_manager.update_album_status(
+            album_path=album_dir,
+            status=AlbumStatus.CONVERTING,
+            processing_stage='converting',
+            working_source_path=working_source,
+            working_processed_path=working_processed
+        )
+        
+        # Scan from working directory (simulating resume)
+        from scanner import Album, MusicFile
+        album = Album(
+            root_path=working_source,  # This is the key: root_path is working dir
+            name="Test Album",
+            music_files=[MusicFile(
+                path=working_source / "track.dsf",
+                relative_path=Path("track.dsf"),
+                extension=".dsf"
+            )]
+        )
+        
+        # Mock converter and other operations to focus on path calculation
+        with patch.object(orchestrator.converter, 'convert_file', return_value=(True, None, 1.0, None)):
+            with patch.object(orchestrator.archiver, 'archive_album', return_value=(True, temp_archive_dir / "Test Album", None)):
+                with patch.object(orchestrator.working_dir_manager, 'move_to_output', return_value=(True, None)) as mock_move:
+                    # Process the album
+                    orchestrator._process_album(album, temp_output_dir)
+                    
+                    # Verify move_to_output was called with correct path
+                    assert mock_move.called
+                    call_args = mock_move.call_args[0]
+                    output_path = call_args[1]
+                    
+                    # Output path should be based on ORIGINAL album name, not working directory name
+                    assert output_path == temp_output_dir / "Test Album"
+                    assert "source" not in str(output_path)  # Should not include working dir suffix
+
+
+@pytest.mark.integration
 @pytest.mark.slow
 class TestFullOrchestratorWorkflow:
     """Integration tests using the full ConversionOrchestrator."""

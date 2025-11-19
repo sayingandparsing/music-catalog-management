@@ -295,15 +295,18 @@ class StateManager:
         self.session.albums.append(album_state)
         self.save_state()
     
+    # Sentinel value to distinguish "not passed" from "explicitly set to None"
+    _NOT_SET = object()
+    
     def update_album_status(
         self,
         album_path: Path,
         status: AlbumStatus,
-        archive_path: Optional[Path] = None,
-        error_message: Optional[str] = None,
-        processing_stage: Optional[str] = None,
-        working_source_path: Optional[Path] = None,
-        working_processed_path: Optional[Path] = None
+        archive_path: Optional[Path] = _NOT_SET,
+        error_message: Optional[str] = _NOT_SET,
+        processing_stage: Optional[str] = _NOT_SET,
+        working_source_path: Optional[Path] = _NOT_SET,
+        working_processed_path: Optional[Path] = _NOT_SET
     ):
         """
         Update album status.
@@ -311,11 +314,11 @@ class StateManager:
         Args:
             album_path: Path to album
             status: New status
-            archive_path: Archive path (optional)
-            error_message: Error message if failed (optional)
-            processing_stage: Current processing stage (optional)
-            working_source_path: Working source directory path (optional)
-            working_processed_path: Working processed directory path (optional)
+            archive_path: Archive path (optional, pass None to clear)
+            error_message: Error message if failed (optional, pass None to clear)
+            processing_stage: Current processing stage (optional, pass None to clear)
+            working_source_path: Working source directory path (pass None to clear, omit to leave unchanged)
+            working_processed_path: Working processed directory path (pass None to clear, omit to leave unchanged)
         """
         if not self.session:
             return
@@ -323,16 +326,18 @@ class StateManager:
         for album in self.session.albums:
             if album.album_path == str(album_path):
                 album.status = status.value
-                if archive_path:
-                    album.archive_path = str(archive_path)
-                if error_message:
+                # Use sentinel pattern to distinguish "not passed" from "explicitly None"
+                if archive_path is not self._NOT_SET:
+                    album.archive_path = str(archive_path) if archive_path else None
+                if error_message is not self._NOT_SET:
                     album.error_message = error_message
-                if processing_stage:
+                if processing_stage is not self._NOT_SET:
                     album.processing_stage = processing_stage
-                if working_source_path:
-                    album.working_source_path = str(working_source_path)
-                if working_processed_path:
-                    album.working_processed_path = str(working_processed_path)
+                # Allow explicit None to clear working paths
+                if working_source_path is not self._NOT_SET:
+                    album.working_source_path = str(working_source_path) if working_source_path else None
+                if working_processed_path is not self._NOT_SET:
+                    album.working_processed_path = str(working_processed_path) if working_processed_path else None
                 if status in [AlbumStatus.COMPLETED, AlbumStatus.FAILED, AlbumStatus.SKIPPED]:
                     album.completed_at = datetime.now().isoformat()
                 break

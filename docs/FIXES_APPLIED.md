@@ -1,13 +1,14 @@
-# Fixes Applied - ISO and FLAC Conversion Issues
+# Fixes Applied - ISO, FLAC, and Output Path Issues
 
 ## Date: November 19, 2025
 
 ## Summary
 
-Fixed two critical bugs preventing music conversion:
+Fixed three critical bugs preventing music conversion:
 
 1. **ISO Path Resolution Bug** - sacd_extract couldn't find ISO files
 2. **FLAC Handling Bug** - FLAC files caused errors when standardization disabled
+3. **Output Path Bug** - Resume from working directory caused self-move error
 
 ## Changes Made
 
@@ -55,7 +56,32 @@ elif input_ext == '.flac':
 
 **Impact:** FLAC files are now gracefully skipped instead of causing album failure
 
-### 3. Fixed Test Mocks (`tests/test_converter.py`)
+### 3. Fixed Output Path Calculation on Resume (`src/main.py`)
+
+**Location:** Line 853-862 in `_process_album` method
+
+**Problem:**
+- When resuming from working directories, album.root_path pointed to working directory
+- Output path was calculated as subdirectory of working directory
+- Error: `Cannot move a directory '...processed' into itself '...processed/AlbumName'`
+
+**Solution:**
+```python
+# Get the original album path from state (in case we're resuming from working directory)
+original_album_path = album.root_path
+if self.state_manager.session:
+    for album_state in self.state_manager.session.albums:
+        if (album_state.working_source_path and 
+            str(album.root_path) == album_state.working_source_path):
+            original_album_path = Path(album_state.album_path)
+            break
+
+output_album_path = output_dir / original_album_path.name
+```
+
+**Impact:** Resume functionality now correctly calculates output paths
+
+### 4. Fixed Test Mocks (`tests/test_converter.py`)
 
 **Location:** Lines 344 and 362
 
@@ -69,9 +95,16 @@ return_value=(True, None, [extracted_dsf], None)
 ## Test Results
 
 All unit tests passing:
-- ✅ 32 converter tests passed
-- ✅ 3 integration tests passed
+- ✅ 35 converter tests passed (including 2 new tests for fixes)
+- ✅ 4 integration tests passed (including 1 new test for output path fix)
+- ✅ 31 state manager tests passed
 - ✅ No linter errors
+
+### New Tests Added
+
+1. **`test_convert_file_flac_skip_when_standardization_disabled`** - Verifies FLAC files are gracefully skipped
+2. **`test_extract_iso_uses_absolute_paths`** - Verifies ISO extraction uses absolute paths
+3. **`test_resume_calculates_correct_output_path`** - Verifies output path calculation on resume
 
 ## What to Test with Real Files
 
@@ -118,8 +151,9 @@ git checkout HEAD -- src/converter.py tests/test_converter.py
 
 ## Files Modified
 
-1. `src/converter.py` - Core conversion logic
-2. `tests/test_converter.py` - Unit test mocks
+1. `src/converter.py` - Core conversion logic (ISO paths, FLAC handling)
+2. `src/main.py` - Output path calculation on resume
+3. `tests/test_converter.py` - Unit test mocks
 
 ## Configuration Notes
 

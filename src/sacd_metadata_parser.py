@@ -18,12 +18,30 @@ def parse_sacd_metadata_file(file_path: Path) -> Optional[Dict[str, Any]]:
     Returns:
         Dictionary with parsed metadata or None if parsing fails
     """
+    if not file_path:
+        return None
+        
     if not file_path.exists():
         return None
     
+    if not file_path.is_file():
+        return None
+    
     try:
+        # Check file size - don't process extremely large files
+        file_size = file_path.stat().st_size
+        if file_size > 10 * 1024 * 1024:  # 10MB limit
+            print(f"Warning: SACD metadata file {file_path} is too large ({file_size} bytes), skipping")
+            return None
+        
+        if file_size == 0:
+            return None
+        
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
+        
+        if not content.strip():
+            return None
         
         metadata = {
             'disc': {},
@@ -32,24 +50,45 @@ def parse_sacd_metadata_file(file_path: Path) -> Optional[Dict[str, Any]]:
         }
         
         # Parse disc information
-        disc_section = _extract_section(content, 'Disc Information:')
-        if disc_section:
-            metadata['disc'] = _parse_disc_info(disc_section)
+        try:
+            disc_section = _extract_section(content, 'Disc Information:')
+            if disc_section:
+                metadata['disc'] = _parse_disc_info(disc_section)
+        except Exception as e:
+            print(f"Warning: Failed to parse disc information: {e}")
+            metadata['disc'] = {}
         
         # Parse album information
-        album_section = _extract_section(content, 'Album Information:')
-        if album_section:
-            metadata['album'] = _parse_album_info(album_section)
+        try:
+            album_section = _extract_section(content, 'Album Information:')
+            if album_section:
+                metadata['album'] = _parse_album_info(album_section)
+        except Exception as e:
+            print(f"Warning: Failed to parse album information: {e}")
+            metadata['album'] = {}
         
         # Parse track list
-        tracks = _parse_track_list(content)
-        if tracks:
-            metadata['tracks'] = tracks
+        try:
+            tracks = _parse_track_list(content)
+            if tracks:
+                metadata['tracks'] = tracks
+        except Exception as e:
+            print(f"Warning: Failed to parse track list: {e}")
+            metadata['tracks'] = []
         
         return metadata
         
+    except PermissionError as e:
+        print(f"Error: Permission denied reading SACD metadata file {file_path}: {e}")
+        return None
+    except UnicodeDecodeError as e:
+        print(f"Error: Failed to decode SACD metadata file {file_path}: {e}")
+        return None
+    except IOError as e:
+        print(f"Error: I/O error reading SACD metadata file {file_path}: {e}")
+        return None
     except Exception as e:
-        print(f"Error parsing SACD metadata file {file_path}: {e}")
+        print(f"Error: Unexpected error parsing SACD metadata file {file_path}: {e}")
         return None
 
 
@@ -66,35 +105,41 @@ def _parse_disc_info(section: str) -> Dict[str, Any]:
     """Parse disc information section."""
     disc_info = {}
     
-    # Extract catalog number (Disc Catalog Number → catalog_number)
-    catalog = _extract_value(section, r'Disc Catalog Number:\s*(.+)')
-    if catalog:
-        disc_info['catalog_number'] = catalog.strip()
+    if not section:
+        return disc_info
     
-    # Extract genre (Disc Genre → genre)
-    genre = _extract_value(section, r'Disc Genre:\s*(.+)')
-    if genre:
-        disc_info['genre'] = genre.strip()
-    
-    # Extract title
-    title = _extract_value(section, r'Title:\s*(.+)')
-    if title:
-        disc_info['title'] = title.strip()
-    
-    # Extract artist
-    artist = _extract_value(section, r'Artist:\s*(.+)')
-    if artist:
-        disc_info['artist'] = artist.strip()
-    
-    # Extract publisher (Publisher → label)
-    publisher = _extract_value(section, r'Publisher:\s*(.+)')
-    if publisher:
-        disc_info['label'] = publisher.strip()
-    
-    # Extract copyright
-    copyright_text = _extract_value(section, r'Copyright:\s*(.+)')
-    if copyright_text:
-        disc_info['copyright'] = copyright_text.strip()
+    try:
+        # Extract catalog number (Disc Catalog Number → catalog_number)
+        catalog = _extract_value(section, r'Disc Catalog Number:\s*(.+)')
+        if catalog:
+            disc_info['catalog_number'] = catalog.strip()
+        
+        # Extract genre (Disc Genre → genre)
+        genre = _extract_value(section, r'Disc Genre:\s*(.+)')
+        if genre:
+            disc_info['genre'] = genre.strip()
+        
+        # Extract title
+        title = _extract_value(section, r'Title:\s*(.+)')
+        if title:
+            disc_info['title'] = title.strip()
+        
+        # Extract artist
+        artist = _extract_value(section, r'Artist:\s*(.+)')
+        if artist:
+            disc_info['artist'] = artist.strip()
+        
+        # Extract publisher (Publisher → label)
+        publisher = _extract_value(section, r'Publisher:\s*(.+)')
+        if publisher:
+            disc_info['label'] = publisher.strip()
+        
+        # Extract copyright
+        copyright_text = _extract_value(section, r'Copyright:\s*(.+)')
+        if copyright_text:
+            disc_info['copyright'] = copyright_text.strip()
+    except Exception as e:
+        print(f"Warning: Error parsing disc info field: {e}")
     
     return disc_info
 
@@ -103,35 +148,41 @@ def _parse_album_info(section: str) -> Dict[str, Any]:
     """Parse album information section."""
     album_info = {}
     
-    # Extract album catalog number
-    catalog = _extract_value(section, r'Album Catalog Number:\s*(.+)')
-    if catalog:
-        album_info['catalog_number'] = catalog.strip()
+    if not section:
+        return album_info
     
-    # Extract genre
-    genre = _extract_value(section, r'Album Genre:\s*(.+)')
-    if genre:
-        album_info['genre'] = genre.strip()
-    
-    # Extract title
-    title = _extract_value(section, r'Title:\s*(.+)')
-    if title:
-        album_info['title'] = title.strip()
-    
-    # Extract artist
-    artist = _extract_value(section, r'Artist:\s*(.+)')
-    if artist:
-        album_info['artist'] = artist.strip()
-    
-    # Extract publisher (Publisher → label)
-    publisher = _extract_value(section, r'Publisher:\s*(.+)')
-    if publisher:
-        album_info['label'] = publisher.strip()
-    
-    # Extract copyright
-    copyright_text = _extract_value(section, r'Copyright:\s*(.+)')
-    if copyright_text:
-        album_info['copyright'] = copyright_text.strip()
+    try:
+        # Extract album catalog number
+        catalog = _extract_value(section, r'Album Catalog Number:\s*(.+)')
+        if catalog:
+            album_info['catalog_number'] = catalog.strip()
+        
+        # Extract genre
+        genre = _extract_value(section, r'Album Genre:\s*(.+)')
+        if genre:
+            album_info['genre'] = genre.strip()
+        
+        # Extract title
+        title = _extract_value(section, r'Title:\s*(.+)')
+        if title:
+            album_info['title'] = title.strip()
+        
+        # Extract artist
+        artist = _extract_value(section, r'Artist:\s*(.+)')
+        if artist:
+            album_info['artist'] = artist.strip()
+        
+        # Extract publisher (Publisher → label)
+        publisher = _extract_value(section, r'Publisher:\s*(.+)')
+        if publisher:
+            album_info['label'] = publisher.strip()
+        
+        # Extract copyright
+        copyright_text = _extract_value(section, r'Copyright:\s*(.+)')
+        if copyright_text:
+            album_info['copyright'] = copyright_text.strip()
+    except Exception as e:
+        print(f"Warning: Error parsing album info field: {e}")
     
     return album_info
 
@@ -140,43 +191,59 @@ def _parse_track_list(content: str) -> List[Dict[str, Any]]:
     """Parse track list from content."""
     tracks = []
     
-    # Find all Title[N] entries with their positions
-    title_pattern = r'Title\[(\d+)\]:\s*(.+)'
-    title_matches = [(m.group(1), m.group(2), m.start()) for m in re.finditer(title_pattern, content)]
+    if not content:
+        return tracks
     
-    for i, (track_index, track_title, start_pos) in enumerate(title_matches):
-        track_num = int(track_index)
+    try:
+        # Find all Title[N] entries with their positions
+        title_pattern = r'Title\[(\d+)\]:\s*(.+)'
+        title_matches = [(m.group(1), m.group(2), m.start()) for m in re.finditer(title_pattern, content)]
         
-        # Get the section for this track (from this Title to next Title or end)
-        if i < len(title_matches) - 1:
-            end_pos = title_matches[i + 1][2]
-            track_section = content[start_pos:end_pos]
-        else:
-            track_section = content[start_pos:]
-        
-        track_info = {
-            'track_number': track_num + 1,  # Convert 0-based to 1-based
-            'title': track_title.strip()
-        }
-        
-        # Extract performer for this track within its section
-        performer_pattern = rf'Performer\[{track_index}\]:\s*(.+)'
-        performer = _extract_value(track_section, performer_pattern)
-        if performer:
-            track_info['artist'] = performer.strip()
-        
-        # Extract duration for this track (format: MM:SS:FF [mins:secs:frames])
-        # Search within this track's section only
-        duration_pattern = r'Duration:\s*(\d+):(\d+):(\d+)'
-        duration_match = re.search(duration_pattern, track_section)
-        if duration_match:
-            minutes = int(duration_match.group(1))
-            seconds = int(duration_match.group(2))
-            # Frames are ignored for now (SACD uses 75 frames per second)
-            total_seconds = minutes * 60 + seconds
-            track_info['duration_seconds'] = float(total_seconds)
-        
-        tracks.append(track_info)
+        for i, (track_index, track_title, start_pos) in enumerate(title_matches):
+            try:
+                track_num = int(track_index)
+                
+                # Get the section for this track (from this Title to next Title or end)
+                if i < len(title_matches) - 1:
+                    end_pos = title_matches[i + 1][2]
+                    track_section = content[start_pos:end_pos]
+                else:
+                    track_section = content[start_pos:]
+                
+                track_info = {
+                    'track_number': track_num + 1,  # Convert 0-based to 1-based
+                    'title': track_title.strip()
+                }
+                
+                # Extract performer for this track within its section
+                try:
+                    performer_pattern = rf'Performer\[{track_index}\]:\s*(.+)'
+                    performer = _extract_value(track_section, performer_pattern)
+                    if performer:
+                        track_info['artist'] = performer.strip()
+                except Exception as e:
+                    print(f"Warning: Failed to parse performer for track {track_num + 1}: {e}")
+                
+                # Extract duration for this track (format: MM:SS:FF [mins:secs:frames])
+                # Search within this track's section only
+                try:
+                    duration_pattern = r'Duration:\s*(\d+):(\d+):(\d+)'
+                    duration_match = re.search(duration_pattern, track_section)
+                    if duration_match:
+                        minutes = int(duration_match.group(1))
+                        seconds = int(duration_match.group(2))
+                        # Frames are ignored for now (SACD uses 75 frames per second)
+                        total_seconds = minutes * 60 + seconds
+                        track_info['duration_seconds'] = float(total_seconds)
+                except (ValueError, IndexError) as e:
+                    print(f"Warning: Failed to parse duration for track {track_num + 1}: {e}")
+                
+                tracks.append(track_info)
+            except Exception as e:
+                print(f"Warning: Failed to parse track at index {track_index}: {e}")
+                continue
+    except Exception as e:
+        print(f"Warning: Error parsing track list: {e}")
     
     return tracks
 
@@ -199,37 +266,62 @@ def find_sacd_metadata_files(directory: Path) -> List[Path]:
     Returns:
         List of paths to potential metadata files
     """
+    if not directory:
+        return []
+        
     if not directory.exists():
         return []
     
-    # Common patterns for SACD metadata files
-    patterns = [
-        '*.txt',
-        'SACD*.txt',
-        '*info*.txt',
-        '*metadata*.txt'
-    ]
+    if not directory.is_dir():
+        return []
     
-    found_files = []
-    for pattern in patterns:
-        found_files.extend(directory.glob(pattern))
-    
-    # Remove duplicates and filter by content
-    unique_files = list(set(found_files))
-    
-    # Verify files contain SACD metadata by checking for key markers
-    verified_files = []
-    for file in unique_files:
-        try:
-            with open(file, 'r', encoding='utf-8', errors='ignore') as f:
-                content = f.read(1000)  # Read first 1000 chars
-                # Check for SACD metadata markers
-                if any(marker in content for marker in ['Disc Information:', 'Album Information:', 'Track list']):
-                    verified_files.append(file)
-        except Exception:
-            continue
-    
-    return verified_files
+    try:
+        # Common patterns for SACD metadata files
+        patterns = [
+            '*.txt',
+            'SACD*.txt',
+            '*info*.txt',
+            '*metadata*.txt'
+        ]
+        
+        found_files = []
+        for pattern in patterns:
+            try:
+                found_files.extend(directory.glob(pattern))
+            except Exception as e:
+                print(f"Warning: Error searching for pattern {pattern} in {directory}: {e}")
+                continue
+        
+        # Remove duplicates and filter by content
+        unique_files = list(set(found_files))
+        
+        # Verify files contain SACD metadata by checking for key markers
+        verified_files = []
+        for file in unique_files:
+            try:
+                # Check file is readable
+                if not file.is_file():
+                    continue
+                    
+                # Don't read extremely large files
+                if file.stat().st_size > 10 * 1024 * 1024:  # 10MB limit
+                    continue
+                
+                with open(file, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read(1000)  # Read first 1000 chars
+                    # Check for SACD metadata markers
+                    if any(marker in content for marker in ['Disc Information:', 'Album Information:', 'Track list']):
+                        verified_files.append(file)
+            except (PermissionError, IOError):
+                continue
+            except Exception as e:
+                print(f"Warning: Error checking file {file}: {e}")
+                continue
+        
+        return verified_files
+    except Exception as e:
+        print(f"Error finding SACD metadata files in {directory}: {e}")
+        return []
 
 
 def get_metadata_for_album(album_directory: Path) -> Optional[Dict[str, Any]]:
@@ -242,11 +334,18 @@ def get_metadata_for_album(album_directory: Path) -> Optional[Dict[str, Any]]:
     Returns:
         Parsed metadata dictionary or None
     """
-    metadata_files = find_sacd_metadata_files(album_directory)
-    
-    if not metadata_files:
+    if not album_directory:
         return None
     
-    # Use the first valid metadata file found
-    return parse_sacd_metadata_file(metadata_files[0])
+    try:
+        metadata_files = find_sacd_metadata_files(album_directory)
+        
+        if not metadata_files:
+            return None
+        
+        # Use the first valid metadata file found
+        return parse_sacd_metadata_file(metadata_files[0])
+    except Exception as e:
+        print(f"Error getting metadata for album {album_directory}: {e}")
+        return None
 

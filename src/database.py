@@ -17,6 +17,24 @@ class MusicDatabase:
     Manages the DuckDB database for music catalog tracking.
     """
     
+    # Whitelist of valid album field names for SQL injection prevention
+    VALID_ALBUM_FIELDS = {
+        'album_name', 'artist', 'release_year', 'recording_year', 'remaster_year',
+        'label', 'label_original', 'release_series', 'catalog_number', 'genre',
+        'mastering_engineer', 'recording_engineer', 'recording_studio',
+        'allmusic_rating', 'source_path', 'archive_path', 'playback_path',
+        'audio_files_checksum', 'processed_at', 'conversion_mode',
+        'sample_rate', 'bit_depth', 'processing_stage',
+        'working_source_path', 'working_processed_path'
+    }
+    
+    # Whitelist of valid track field names
+    VALID_TRACK_FIELDS = {
+        'album_id', 'track_number', 'title', 'duration_seconds',
+        'file_path', 'file_size', 'file_format', 'genre',
+        'dynamic_range_crest', 'dynamic_range_r128', 'musicians'
+    }
+    
     def __init__(self, db_path: Path):
         """
         Initialize database connection.
@@ -244,6 +262,11 @@ class MusicDatabase:
             values = []
             
             for key, value in kwargs.items():
+                # Validate field name against whitelist to prevent SQL injection
+                if key not in self.VALID_ALBUM_FIELDS:
+                    print(f"Warning: Ignoring invalid field name '{key}' in update_album")
+                    continue
+                    
                 if value is not None:
                     fields.append(f"{key} = ?")
                     values.append(value)
@@ -437,6 +460,11 @@ class MusicDatabase:
                     kwargs['musicians'] = json.dumps(kwargs['musicians'])
             
             for key, value in kwargs.items():
+                # Validate field name against whitelist to prevent SQL injection
+                if key not in self.VALID_TRACK_FIELDS:
+                    print(f"Warning: Ignoring invalid field name '{key}' in update_track")
+                    continue
+                    
                 if value is not None:
                     fields.append(f"{key} = ?")
                     values.append(value)

@@ -370,6 +370,23 @@ class ConversionOrchestrator:
         working_source_path = None
         working_processed_path = None
         
+        # Determine the original source path (may differ from album.root_path during resume)
+        # This is the path we should use for source removal, not album.root_path
+        original_source_path = album.root_path
+        if self.state_manager.session:
+            for album_state in self.state_manager.session.albums:
+                # Check if album.root_path is a working directory
+                if (album_state.working_source_path and 
+                    str(album.root_path) == album_state.working_source_path):
+                    # Found match - use the stored original path
+                    original_source_path = Path(album_state.album_path)
+                    self.logger.debug(f"  Resuming from working directory, original source: {original_source_path}")
+                    break
+                # Also check if album.root_path matches the original album_path
+                elif str(album.root_path) == album_state.album_path:
+                    original_source_path = album.root_path
+                    break
+        
         # Get or create album ID
         audio_files = [f.path for f in album.music_files]
         if self.dedup_manager:
@@ -391,7 +408,7 @@ class ConversionOrchestrator:
                 self.database.create_album(
                     album_id=album_id,
                     album_name=album.name,
-                    source_path=str(album.root_path),
+                    source_path=str(original_source_path),  # Use original source, not working dir
                     audio_files_checksum=audio_checksum,
                     conversion_mode=self.config.get('conversion.mode'),
                     sample_rate=self.config.get('conversion.sample_rate'),
@@ -849,7 +866,10 @@ class ConversionOrchestrator:
                 )
                 
                 finalize_start = datetime.now()
-                output_album_path = output_dir / album.root_path.name
+                
+                # Use the original source path determined at the beginning of the method
+                # to get the correct album name for the output directory
+                output_album_path = output_dir / original_source_path.name
                 
                 # Move processed to output
                 success, error = self.working_dir_manager.move_to_output(
@@ -932,26 +952,39 @@ class ConversionOrchestrator:
                 # Remove source files if configured
                 if self.config.get('processing.remove_source_after_conversion', False):
                     self.logger.info("  Removing source files from input directory...")
-                    try:
-                        import shutil
-                        shutil.rmtree(album.root_path)
-                        self.logger.info(f"  Successfully removed: {album.root_path}")
-                        
+                    # Safety check: only remove if the path exists and is not a working directory
+                    if original_source_path.exists() and not str(original_source_path).endswith(('_source', '_processed')):
+                        try:
+                            import shutil
+                            shutil.rmtree(original_source_path)
+                            self.logger.info(f"  Successfully removed: {original_source_path}")
+                            
+                            if self.database:
+                                self.database.add_processing_history(
+                                    album_id=album_id,
+                                    operation_type='cleanup',
+                                    status='success',
+                                    duration_seconds=0.0
+                                )
+                        except Exception as e:
+                            self.logger.warning(f"  Failed to remove source files: {e}")
+                            if self.database:
+                                self.database.add_processing_history(
+                                    album_id=album_id,
+                                    operation_type='cleanup',
+                                    status='failed',
+                                    error_message=str(e),
+                                    duration_seconds=0.0
+                                )
+                    else:
+                        warning_msg = f"  Skipped source removal - safety check failed (path: {original_source_path})"
+                        self.logger.warning(warning_msg)
                         if self.database:
                             self.database.add_processing_history(
                                 album_id=album_id,
                                 operation_type='cleanup',
-                                status='success',
-                                duration_seconds=0.0
-                            )
-                    except Exception as e:
-                        self.logger.warning(f"  Failed to remove source files: {e}")
-                        if self.database:
-                            self.database.add_processing_history(
-                                album_id=album_id,
-                                operation_type='cleanup',
-                                status='failed',
-                                error_message=str(e),
+                                status='skipped',
+                                error_message="Safety check failed - appears to be working directory",
                                 duration_seconds=0.0
                             )
             else:

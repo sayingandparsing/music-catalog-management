@@ -38,7 +38,7 @@ A robust Python CLI utility for converting DSD audio files (ISO/DSF) to FLAC or 
 
 - **sacd_extract**: Required for SACD ISO file processing
   - Extracts DSD audio from SACD ISO images
-  - See [INSTALL_SACD_EXTRACT.md](INSTALL_SACD_EXTRACT.md) for installation instructions
+  - See [INSTALL_SACD_EXTRACT.md](docs/INSTALL_SACD_EXTRACT.md) for installation instructions
   - **Note**: If `sacd_extract` is not installed, the converter will only process DSF/DFF files and skip ISO files
 
 ### Python Dependencies
@@ -64,7 +64,7 @@ All Python dependencies are listed in `requirements.txt` and can be installed vi
 
 4. **(Optional)** Install sacd_extract for ISO file support:
    ```bash
-   # See INSTALL_SACD_EXTRACT.md for detailed instructions
+   # See docs/INSTALL_SACD_EXTRACT.md for detailed instructions
    ./install_sacd_extract.sh
    
    # Or verify if already installed
@@ -151,7 +151,7 @@ When `remove_source_after_conversion: true` is set in your config, the tool will
 - Verify your archive is complete and backed up
 - Only enable once you trust the workflow
 
-See [WORKFLOW_GUIDE.md](WORKFLOW_GUIDE.md) for detailed information.
+See [WORKFLOW_GUIDE.md](docs/WORKFLOW_GUIDE.md) for detailed information.
 
 ### Custom Configuration
 
@@ -479,7 +479,7 @@ ERROR: sacd_extract not found. Install it to process ISO files.
 ```
 
 **Solution**: 
-1. Install sacd_extract following instructions in [INSTALL_SACD_EXTRACT.md](INSTALL_SACD_EXTRACT.md)
+1. Install sacd_extract following instructions in [INSTALL_SACD_EXTRACT.md](docs/INSTALL_SACD_EXTRACT.md)
 2. Run `./install_sacd_extract.sh` for guided installation
 3. Verify with `which sacd_extract`
 
@@ -678,6 +678,21 @@ Contributions are welcome! Areas for improvement:
 - Parallel processing
 - Cloud storage integration
 - Additional metadata sources
+
+## Documentation
+
+For detailed documentation, see the [`docs/`](docs/) directory:
+
+- **[WORKFLOW_GUIDE.md](docs/WORKFLOW_GUIDE.md)** - Detailed workflow guide and best practices
+- **[INSTALL_SACD_EXTRACT.md](docs/INSTALL_SACD_EXTRACT.md)** - SACD extract installation instructions
+- **[BUG_FIXES_IMPLEMENTED.md](docs/BUG_FIXES_IMPLEMENTED.md)** - Recent bug fixes and improvements
+- **[WORKING_DIRECTORY_IMPLEMENTATION.md](docs/WORKING_DIRECTORY_IMPLEMENTATION.md)** - Technical details on working directory system
+- **[SACD_METADATA_ERROR_HANDLING.md](docs/SACD_METADATA_ERROR_HANDLING.md)** - SACD metadata parsing details
+- **[FEATURE_SOURCE_REMOVAL.md](docs/FEATURE_SOURCE_REMOVAL.md)** - Source file removal feature documentation
+- **[TEST_COVERAGE_SUMMARY.md](docs/TEST_COVERAGE_SUMMARY.md)** - Test coverage information
+- **[CHANGES.md](docs/CHANGES.md)** - Detailed changelog
+- **[FIXES_APPLIED.md](docs/FIXES_APPLIED.md)** - Historical fixes log
+- **[NEXT_STEPS.md](docs/NEXT_STEPS.md)** - Future development plans
 
 ## License
 

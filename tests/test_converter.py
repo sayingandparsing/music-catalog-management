@@ -121,6 +121,25 @@ class TestConvertFile:
         assert success is False
         assert "Unsupported input format" in error
     
+    def test_convert_file_flac_skip_when_standardization_disabled(self, mock_ffmpeg_available, temp_dir):
+        """Test that FLAC files are skipped when standardization is disabled."""
+        converter = AudioConverter(
+            mode="iso_dsf_to_flac",
+            flac_standardization_enabled=False,
+            calculate_dynamic_range=False
+        )
+        
+        input_path = temp_dir / "input.flac"
+        output_path = temp_dir / "output.flac"
+        
+        input_path.write_text("mock flac")
+        
+        success, error, duration, dynamic_range = converter.convert_file(input_path, output_path)
+        
+        assert success is True
+        assert "skipped" in error.lower()
+        assert "standardization disabled" in error.lower()
+    
     def test_convert_file_creates_output_directory(self, mock_ffmpeg_available, mock_ffmpeg_success, temp_dir):
         """Test that output directory is created if it doesn't exist."""
         converter = AudioConverter()
@@ -365,6 +384,44 @@ class TestISOConversion:
             # Should succeed and output file should exist
             assert success is True
             assert output_path.exists()
+    
+    def test_extract_iso_uses_absolute_paths(self, mock_ffmpeg_available, temp_dir):
+        """Test that ISO extraction uses absolute paths for sacd_extract."""
+        converter = AudioConverter()
+        converter.has_sacd_extract = True
+        
+        input_path = temp_dir / "input.iso"
+        extract_dir = temp_dir / "extract"
+        extract_dir.mkdir()
+        
+        # Create a mock ISO file
+        input_path.write_text("mock iso")
+        
+        # Mock subprocess.run to capture the command
+        with patch('subprocess.run') as mock_run:
+            # Mock successful extraction
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            
+            # Create a mock DSF file that will be "found" after extraction
+            mock_dsf = extract_dir / "track01.dsf"
+            mock_dsf.write_text("mock dsf")
+            
+            converter._extract_iso_to_dsf(input_path, extract_dir)
+            
+            # Verify subprocess.run was called
+            assert mock_run.called
+            
+            # Get the command that was passed
+            call_args = mock_run.call_args
+            cmd = call_args[0][0]
+            
+            # Verify the command uses absolute paths
+            assert cmd[0] == 'sacd_extract'
+            assert cmd[1] == '-i'
+            # The path should be absolute (no relative components like '..' or '.')
+            iso_path = cmd[2]
+            assert not iso_path.startswith('.')
+            assert '/' in iso_path or '\\' in iso_path  # Should have path separators
 
 
 class TestFFmpegExecution:

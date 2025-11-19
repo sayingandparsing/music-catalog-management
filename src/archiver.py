@@ -52,8 +52,18 @@ class Archiver:
             
             # Check if already archived
             if archive_path.exists():
-                # Archive already exists, assume it's valid
-                return True, archive_path, None
+                # Verify existing archive is complete and valid
+                is_valid, error = self._verify_copy(album_path, archive_path)
+                if is_valid:
+                    # Archive already exists and is valid
+                    return True, archive_path, None
+                else:
+                    # Existing archive is corrupted/incomplete, remove it and re-archive
+                    print(f"Warning: Existing archive appears corrupted ({error}), will re-archive")
+                    try:
+                        shutil.rmtree(archive_path, ignore_errors=True)
+                    except Exception as e:
+                        return False, None, f"Failed to remove corrupted archive: {e}"
             
             # Create parent directory
             archive_path.parent.mkdir(parents=True, exist_ok=True)

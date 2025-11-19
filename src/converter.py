@@ -690,7 +690,8 @@ class AudioConverter:
     
     def calculate_dynamic_range_metrics(
         self,
-        audio_file: Path
+        audio_file: Path,
+        max_file_size_mb: int = 500
     ) -> Optional[Dict[str, float]]:
         """
         Calculate dynamic range metrics for an audio file.
@@ -699,13 +700,28 @@ class AudioConverter:
         - Crest factor (peak to RMS ratio in dB)
         - R128 loudness range (if pyloudnorm is available)
         
+        Note: This method loads the entire audio file into memory for analysis.
+        Files larger than max_file_size_mb will be skipped to prevent memory exhaustion.
+        
         Args:
             audio_file: Path to audio file (FLAC or other format supported by ffmpeg)
+            max_file_size_mb: Maximum file size in MB to process (default: 500MB)
             
         Returns:
             Dict with dynamic_range_crest and dynamic_range_r128, or None if calculation fails
         """
         try:
+            # Check file size to prevent memory exhaustion
+            # A 1-hour 24/96 stereo file is ~2.5 GB of raw PCM data in memory
+            if not audio_file.exists():
+                return None
+                
+            file_size_mb = audio_file.stat().st_size / (1024 * 1024)
+            if file_size_mb > max_file_size_mb:
+                print(f"Warning: Skipping DR calculation for {audio_file.name} "
+                      f"({file_size_mb:.1f}MB exceeds {max_file_size_mb}MB limit)")
+                return None
+            
             # Extract raw audio data using ffmpeg
             cmd = [
                 'ffmpeg',
