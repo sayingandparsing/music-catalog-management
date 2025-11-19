@@ -171,10 +171,10 @@ def test_should_skip_album(dedup_manager, temp_album_dir):
 
 
 def test_get_or_create_album_id(dedup_manager, temp_album_dir):
-    """Test getting or creating album ID."""
+    """Test getting or creating deterministic album ID."""
     album_path, audio_files = temp_album_dir
     
-    # First call should create new ID
+    # First call should create new deterministic ID
     album_id1 = dedup_manager.get_or_create_album_id(album_path, audio_files)
     assert album_id1 is not None
     
@@ -183,33 +183,39 @@ def test_get_or_create_album_id(dedup_manager, temp_album_dir):
     assert metadata.exists()
     assert metadata.get_album_id() == album_id1
     
-    # Second call should return same ID
+    # Second call should return same ID (from metadata file)
     album_id2 = dedup_manager.get_or_create_album_id(album_path, audio_files)
     assert album_id2 == album_id1
+    
+    # ID should be deterministic - same files = same ID
+    direct_id = AlbumMetadata.generate_album_id(audio_files)
+    assert album_id1 == direct_id
 
 
-def test_get_or_create_album_id_with_duplicate(dedup_manager, temp_album_dir):
-    """Test getting album ID when duplicate exists in database."""
-    album_path, audio_files = temp_album_dir
-    
-    # Create existing album with same checksum in database
-    checksum = AlbumMetadata.calculate_audio_checksum(audio_files)
-    existing_id = "existing-album-id"
-    
-    dedup_manager.database.create_album(
-        album_id=existing_id,
-        album_name="Existing Album",
-        source_path="/other/path",
-        audio_files_checksum=checksum
-    )
-    
-    # Should reuse existing ID
-    album_id = dedup_manager.get_or_create_album_id(album_path, audio_files)
-    assert album_id == existing_id
-    
-    # Metadata file should be created with existing ID
-    metadata = AlbumMetadata(album_path)
-    assert metadata.get_album_id() == existing_id
+def test_get_or_create_album_id_deterministic_across_locations(dedup_manager):
+    """Test that same audio content in different locations produces same ID."""
+    with tempfile.TemporaryDirectory() as tmpdir1, tempfile.TemporaryDirectory() as tmpdir2:
+        # Create same audio files in two different locations
+        audio_files1 = []
+        audio_files2 = []
+        
+        for i in range(3):
+            # Location 1
+            file1 = Path(tmpdir1) / f"track{i+1:02d}.flac"
+            file1.write_bytes(b"fake audio data " * 100)
+            audio_files1.append(file1)
+            
+            # Location 2 - SAME CONTENT
+            file2 = Path(tmpdir2) / f"track{i+1:02d}.flac"
+            file2.write_bytes(b"fake audio data " * 100)
+            audio_files2.append(file2)
+        
+        # Generate IDs for both locations
+        album_id1 = dedup_manager.get_or_create_album_id(Path(tmpdir1), audio_files1)
+        album_id2 = dedup_manager.get_or_create_album_id(Path(tmpdir2), audio_files2)
+        
+        # Same content = same deterministic ID
+        assert album_id1 == album_id2
 
 
 def test_incomplete_processing(dedup_manager, temp_album_dir):

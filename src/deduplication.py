@@ -209,46 +209,32 @@ class DeduplicationManager:
         audio_files: List[Path]
     ) -> str:
         """
-        Get existing album ID or create a new one.
+        Get existing album ID or create a new deterministic one.
+        
+        Since album IDs are now deterministic (based on audio content),
+        the same audio files will always produce the same ID.
         
         Args:
             album_path: Path to album directory
             audio_files: List of audio files
             
         Returns:
-            Album ID (UUID)
+            Album ID (UUID v5 derived from audio content)
         """
         metadata = AlbumMetadata(album_path)
         
-        # Check if metadata file exists
+        # Check if metadata file exists and is valid
         if metadata.exists():
             album_id = metadata.get_album_id()
             if album_id:
                 return album_id
         
-        # Check if duplicate exists by checksum
-        duplicate = self.find_duplicate_by_checksum(audio_files)
-        if duplicate:
-            # Validate that the duplicate album completed successfully
-            # Only reuse ID if the original has a playback_path (indicates completion)
-            if duplicate.get('playback_path'):
-                album_id = duplicate['album_id']
-                # Update metadata file with existing ID
-                checksum = AlbumMetadata.calculate_audio_checksum(audio_files)
-                metadata.write(
-                    album_id=album_id,
-                    audio_checksum=checksum
-                )
-                return album_id
-            else:
-                # Duplicate exists but processing was incomplete/failed
-                # Generate a new ID instead of reusing the incomplete one
-                print(f"Warning: Found duplicate album {duplicate['album_id']} but it's incomplete (no playback_path). Generating new ID.")
-                pass  # Fall through to generate new ID
-        
-        # Generate new album ID
-        album_id = AlbumMetadata.generate_album_id()
+        # Generate deterministic album ID from audio content
+        # This will always produce the same ID for the same audio files
+        album_id = AlbumMetadata.generate_album_id(audio_files)
         checksum = AlbumMetadata.calculate_audio_checksum(audio_files)
+        
+        # Write metadata file
         metadata.write(
             album_id=album_id,
             audio_checksum=checksum
@@ -289,7 +275,10 @@ class DeduplicationManager:
                 updates['playback_path'] = str(new_path)
             
             if updates:
-                return self.database.update_album(album_id, **updates)
+                result = self.database.update_album(album_id, **updates)
+                if result:
+                    self.database.commit()
+                return result
             
             return True
         except Exception as e:
@@ -335,10 +324,13 @@ class AlbumRegistry:
         if location_type not in valid_types:
             return False
         
-        return self.database.update_album(
+        result = self.database.update_album(
             album_id,
             **{location_type: str(path)}
         )
+        if result:
+            self.database.commit()
+        return result
     
     def find_album_locations(
         self,

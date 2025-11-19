@@ -19,6 +19,10 @@ class AlbumMetadata:
     
     METADATA_FILENAME = ".album_metadata"
     
+    # UUID v5 namespace for deterministic album IDs
+    # Using a custom namespace UUID for music catalog
+    ALBUM_ID_NAMESPACE = uuid.UUID('6ba7b810-9dad-11d1-80b4-00c04fd430c8')
+    
     def __init__(self, album_path: Path):
         """
         Initialize album metadata manager.
@@ -53,6 +57,7 @@ class AlbumMetadata:
                 data = json.load(f)
             
             # Validate required fields
+            # Note: processed_album_id is optional (only after conversion)
             required_fields = ['album_id', 'created_at', 'audio_checksum']
             if not all(field in data for field in required_fields):
                 return None
@@ -163,15 +168,79 @@ class AlbumMetadata:
         metadata = self.read()
         return metadata['audio_checksum'] if metadata else None
     
-    @staticmethod
-    def generate_album_id() -> str:
+    def get_processed_album_id(self) -> Optional[str]:
         """
-        Generate a new album UUID.
+        Get processed album ID from metadata file.
         
         Returns:
-            UUID string
+            Processed album ID or None
         """
-        return str(uuid.uuid4())
+        metadata = self.read()
+        return metadata.get('processed_album_id') if metadata else None
+    
+    def set_processed_album_id(self, processed_album_id: str) -> bool:
+        """
+        Set processed album ID in metadata file.
+        
+        Args:
+            processed_album_id: Processed album ID to set
+            
+        Returns:
+            True if successful
+        """
+        return self.update(processed_album_id=processed_album_id)
+    
+    @staticmethod
+    def validate_audio_files(audio_files: List[Path]) -> None:
+        """
+        Validate that audio files don't mix ISO and FLAC/DSF formats.
+        
+        Args:
+            audio_files: List of audio file paths
+            
+        Raises:
+            ValueError: If files contain mixed ISO and FLAC/DSF formats
+        """
+        if not audio_files:
+            return
+        
+        extensions = {f.suffix.lower() for f in audio_files}
+        has_iso = '.iso' in extensions
+        has_flac_dsf = bool(extensions & {'.flac', '.dsf', '.dff'})
+        
+        if has_iso and has_flac_dsf:
+            raise ValueError(
+                "Mixed album formats not supported: album contains both ISO and FLAC/DSF files. "
+                "Albums must be either ISO-only or FLAC/DSF-only."
+            )
+    
+    @staticmethod
+    def generate_album_id(audio_files: List[Path]) -> str:
+        """
+        Generate a deterministic album UUID based on audio content.
+        
+        Uses UUID v5 with content hash to ensure the same audio files
+        always produce the same album ID.
+        
+        Args:
+            audio_files: List of audio file paths
+            
+        Returns:
+            UUID v5 string derived from audio content
+            
+        Raises:
+            ValueError: If audio files contain mixed ISO and FLAC/DSF formats
+        """
+        # Validate audio files first
+        AlbumMetadata.validate_audio_files(audio_files)
+        
+        # Calculate content checksum
+        content_hash = AlbumMetadata.calculate_audio_checksum(audio_files)
+        
+        # Generate deterministic UUID v5 from content hash
+        album_uuid = uuid.uuid5(AlbumMetadata.ALBUM_ID_NAMESPACE, content_hash)
+        
+        return str(album_uuid)
     
     @staticmethod
     def calculate_audio_checksum(
@@ -181,7 +250,10 @@ class AlbumMetadata:
         """
         Calculate checksum for audio files.
         
-        Checksums are calculated by:
+        For ISO files:
+        - Hash first 20MB + file size (fast, collision-resistant)
+        
+        For FLAC/DSF files:
         1. Sorting file paths alphabetically
         2. For each file, calculate individual checksum
         3. Concatenate all checksums and hash the result
@@ -195,11 +267,26 @@ class AlbumMetadata:
             
         Returns:
             Hex digest of combined checksum
+            
+        Raises:
+            ValueError: If files contain mixed ISO and FLAC/DSF formats
         """
+        # Validate no mixed formats
+        AlbumMetadata.validate_audio_files(audio_files)
+        
         # Sort files for consistent ordering
         sorted_files = sorted(audio_files, key=lambda p: str(p))
         
-        # Calculate individual checksums
+        # Check if this is an ISO album
+        if sorted_files and sorted_files[0].suffix.lower() == '.iso':
+            # For ISO files, use special fast hashing
+            # (should only be one ISO file per album)
+            return AlbumMetadata._calculate_iso_checksum(
+                sorted_files[0],
+                algorithm
+            )
+        
+        # For FLAC/DSF files, calculate individual checksums
         file_checksums = []
         for file_path in sorted_files:
             file_checksum = AlbumMetadata._calculate_file_checksum(
@@ -214,6 +301,48 @@ class AlbumMetadata:
         # Hash the combined string
         hash_obj = hashlib.new(algorithm)
         hash_obj.update(combined.encode('utf-8'))
+        
+        return hash_obj.hexdigest()
+    
+    @staticmethod
+    def _calculate_iso_checksum(
+        file_path: Path,
+        algorithm: str = 'sha256'
+    ) -> str:
+        """
+        Calculate checksum for an ISO file using first 20MB + file size.
+        
+        This is much faster than hashing the entire ISO file (which can be 5GB+)
+        while still providing excellent collision resistance.
+        
+        Args:
+            file_path: Path to ISO file
+            algorithm: Hash algorithm
+            
+        Returns:
+            Hex digest of partial checksum
+        """
+        hash_obj = hashlib.new(algorithm)
+        
+        # Get file size
+        file_size = file_path.stat().st_size
+        
+        # Read first 20MB (or full file if smaller)
+        chunk_size = 20 * 1024 * 1024  # 20MB
+        bytes_to_read = min(chunk_size, file_size)
+        
+        with open(file_path, 'rb') as f:
+            # Read in 8MB chunks up to 20MB total
+            bytes_read = 0
+            while bytes_read < bytes_to_read:
+                chunk = f.read(min(8192 * 1024, bytes_to_read - bytes_read))
+                if not chunk:
+                    break
+                hash_obj.update(chunk)
+                bytes_read += len(chunk)
+        
+        # Include file size in hash for additional uniqueness
+        hash_obj.update(str(file_size).encode('utf-8'))
         
         return hash_obj.hexdigest()
     
@@ -245,6 +374,7 @@ class AlbumMetadata:
     def create_for_album(
         album_path: Path,
         audio_files: List[Path],
+        album_id: Optional[str] = None,
         **kwargs
     ) -> Optional[str]:
         """
@@ -253,14 +383,17 @@ class AlbumMetadata:
         Args:
             album_path: Path to album directory
             audio_files: List of audio file paths
+            album_id: Optional original album ID (for processed/converted albums)
             **kwargs: Additional metadata fields
             
         Returns:
             Album ID if successful, None otherwise
         """
         try:
-            # Generate album ID
-            album_id = AlbumMetadata.generate_album_id()
+            # If album_id is provided (e.g., for converted albums), use it
+            # Otherwise, generate deterministic album ID from audio content
+            if album_id is None:
+                album_id = AlbumMetadata.generate_album_id(audio_files)
             
             # Calculate audio checksum
             audio_checksum = AlbumMetadata.calculate_audio_checksum(audio_files)

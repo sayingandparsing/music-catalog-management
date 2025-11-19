@@ -317,6 +317,14 @@ class ConversionOrchestrator:
                     self.logger.info("Remove .state/PAUSE file and use --resume to continue.")
                     break
             
+            # Check if album has any convertible files
+            if not self._has_convertible_files(album):
+                file_types = ', '.join(sorted(set(f.extension for f in album.music_files)))
+                self.logger.info(f"\n[{idx}/{total_albums}] Skipping album: {album.root_path.name}")
+                self.logger.info(f"  No convertible files found (contains: {file_types})")
+                self.stats['albums_skipped'] += 1
+                continue
+            
             # Check if album should be skipped (already processed)
             if self.skip_processed and self.dedup_manager:
                 should_skip, reason = self.dedup_manager.should_skip_album(
@@ -342,6 +350,42 @@ class ConversionOrchestrator:
             self.logger.log_album_end(album.root_path, success, len(album.music_files))
         
         return all_success
+    
+    def _has_convertible_files(self, album: Album) -> bool:
+        """
+        Check if album has any files that can be converted based on current settings.
+        
+        Args:
+            album: Album to check
+            
+        Returns:
+            True if album has convertible files
+        """
+        conversion_mode = self.config.get('conversion.mode')
+        flac_standardization_enabled = self.config.get('conversion.flac_standardization.enabled', False)
+        
+        # Determine which extensions are convertible based on mode and settings
+        convertible_extensions = set()
+        
+        if conversion_mode == 'iso_dsf_to_flac':
+            convertible_extensions.add('.iso')
+            convertible_extensions.add('.dsf')
+            convertible_extensions.add('.dff')
+            
+            # FLAC files are only convertible if standardization is enabled
+            if flac_standardization_enabled:
+                convertible_extensions.add('.flac')
+        
+        elif conversion_mode == 'iso_to_dsf':
+            # Only ISO files can be converted to DSF
+            convertible_extensions.add('.iso')
+        
+        # Check if any music files in the album have convertible extensions
+        for music_file in album.music_files:
+            if music_file.extension.lower() in convertible_extensions:
+                return True
+        
+        return False
     
     def _process_album(self, album: Album, output_dir: Path) -> bool:
         """
@@ -370,6 +414,7 @@ class ConversionOrchestrator:
         # Working directory paths (will be set in PREPARING stage)
         working_source_path = None
         working_processed_path = None
+        archive_path = None  # Will be set in ARCHIVING stage
         
         # Determine the original source path (may differ from album.root_path during resume)
         # This is the path we should use for source removal, not album.root_path
@@ -406,19 +451,40 @@ class ConversionOrchestrator:
         # Calculate audio checksum
         audio_checksum = AlbumMetadata.calculate_audio_checksum(audio_files)
         
+        # Extract album-level metadata (artist, album name)
+        album_metadata = self._extract_album_metadata(album.root_path, album.music_files)
+        
         # Create or update album record in database
         if self.database:
             db_album = self.database.get_album_by_id(album_id)
             if not db_album:
                 self.database.create_album(
                     album_id=album_id,
-                    album_name=album.name,
+                    album_name=album_metadata['album_name'],  # Use metadata album name
                     source_path=str(original_source_path),  # Use original source, not working dir
                     audio_files_checksum=audio_checksum,
+                    artist=album_metadata['artist'],  # Add artist from metadata
                     conversion_mode=self.config.get('conversion.mode'),
                     sample_rate=self.config.get('conversion.sample_rate'),
                     bit_depth=self.config.get('conversion.bit_depth')
                 )
+                self.database.commit()
+                self.logger.info(f"  Album: {album_metadata['album_name']}")
+                if album_metadata['artist']:
+                    self.logger.info(f"  Artist: {album_metadata['artist']}")
+            else:
+                # Update existing record with metadata if not already set
+                updates = {}
+                if album_metadata['artist'] and not db_album.get('artist'):
+                    updates['artist'] = album_metadata['artist']
+                if album_metadata['album_name'] and db_album.get('album_name') == album.root_path.name:
+                    # If album name is just folder name, update with metadata
+                    updates['album_name'] = album_metadata['album_name']
+                
+                if updates:
+                    self.database.update_album(album_id=album_id, **updates)
+                    self.database.commit()
+                    self.logger.info(f"  Updated album metadata: {updates}")
         
         try:
             # ===================================================================
@@ -514,6 +580,7 @@ class ConversionOrchestrator:
                         working_processed_path=str(working_processed_path),
                         processing_stage='converting'
                     )
+                    self.database.commit()
             else:
                 self.logger.info("  [DRY RUN] Would create working directories")
             
@@ -528,8 +595,10 @@ class ConversionOrchestrator:
                     operation_type='convert',
                     status='started',
                     working_source_path=str(working_source_path) if working_source_path else None,
-                    working_processed_path=str(working_processed_path) if working_processed_path else None
+                    working_processed_path=str(working_processed_path) if working_processed_path else None,
+                    album_id_origin=album_id  # Original album ID
                 )
+                self.database.commit()
             
             files_failed = 0
             files_converted = 0
@@ -629,6 +698,7 @@ class ConversionOrchestrator:
                                         )
                                         
                                         self.logger.debug(f"  Created track record: {track_metadata.get('title', output_file_path.stem)}")
+                                        self.database.commit()  # Commit track record
                                         
                                         # Check for SACD metadata in source directory and write to FLAC file
                                         if output_file_path.suffix.lower() == '.flac' and self.config.get('metadata.write_sacd_to_flac', True):
@@ -672,6 +742,7 @@ class ConversionOrchestrator:
                                                     
                                                     if album_updates:
                                                         self.database.update_album(album_id=album_id, **album_updates)
+                                                        self.database.commit()
                                                         self.logger.debug(f"  Updated album with SACD metadata")
                                         
                                         # Determine file extension based on conversion mode
@@ -722,6 +793,7 @@ class ConversionOrchestrator:
                                                 )
                                                 
                                                 self.logger.debug(f"  Created track record: {track_metadata.get('title', track_file.stem)}")
+                                                self.database.commit()  # Commit track record
                                                 
                                                 # Write SACD metadata to FLAC file
                                                 if sacd_metadata and track_file.suffix.lower() == '.flac' and self.config.get('metadata.write_sacd_to_flac', True):
@@ -775,8 +847,10 @@ class ConversionOrchestrator:
                             operation_type='convert',
                             status='failed',
                             error_message="File conversion failed",
-                            duration_seconds=conversion_duration
+                            duration_seconds=conversion_duration,
+                            album_id_origin=album_id
                         )
+                        self.database.commit()
                     
                     self.stats['files_failed'] += files_failed
                     self.stats['files_converted'] += files_converted
@@ -796,8 +870,10 @@ class ConversionOrchestrator:
                     album_id=album_id,
                     operation_type='convert',
                     status='success',
-                    duration_seconds=conversion_duration
+                    duration_seconds=conversion_duration,
+                    album_id_origin=album_id
                 )
+                self.database.commit()
             
             # ===================================================================
             # STAGE 3: ARCHIVING - Copy source to archive
@@ -841,8 +917,10 @@ class ConversionOrchestrator:
                             operation_type='archive',
                             status='failed',
                             error_message=error,
-                            duration_seconds=archive_duration
+                            duration_seconds=archive_duration,
+                            album_id_origin=album_id
                         )
+                        self.database.commit()
                     
                     # Cleanup working directories
                     if cleanup_on_failure:
@@ -862,17 +940,21 @@ class ConversionOrchestrator:
                         album_id=album_id,
                         operation_type='archive',
                         status='success',
-                        duration_seconds=archive_duration
+                        duration_seconds=archive_duration,
+                        album_id_origin=album_id
                     )
+                    self.database.commit()
                 
-                # Create metadata file in archive
+                # Create metadata file in archive (original files, so no processed_album_id yet)
                 archive_audio_files = list(archive_path.rglob('*'))
                 archive_audio_files = [f for f in archive_audio_files if f.suffix.lower() in 
                                       self.config.get('files.music_extensions', ['.iso', '.dsf', '.dff', '.flac'])]
                 if archive_audio_files:
+                    # Use the existing album_id from source
                     AlbumMetadata.create_for_album(
                         archive_path,
-                        archive_audio_files
+                        archive_audio_files,
+                        album_id=album_id
                     )
             else:
                 self.logger.info("  [DRY RUN] Would archive files")
@@ -926,8 +1008,10 @@ class ConversionOrchestrator:
                                 operation_type='finalize',
                                 status='failed',
                                 error_message=error_msg,
-                                duration_seconds=(datetime.now() - finalize_start).total_seconds()
+                                duration_seconds=(datetime.now() - finalize_start).total_seconds(),
+                                album_id_origin=album_id
                             )
+                            self.database.commit()
                         return False
                 
                 # Remove existing output path if it already exists (e.g., reprocessing same album)
@@ -954,8 +1038,10 @@ class ConversionOrchestrator:
                                 operation_type='finalize',
                                 status='failed',
                                 error_message=error_msg,
-                                duration_seconds=(datetime.now() - finalize_start).total_seconds()
+                                duration_seconds=(datetime.now() - finalize_start).total_seconds(),
+                                album_id_origin=album_id
                             )
+                            self.database.commit()
                         # Do not cleanup working dirs so resume can recover
                         return False
                 
@@ -967,6 +1053,19 @@ class ConversionOrchestrator:
                 
                 if not success:
                     self.logger.error(f"  Failed to move to output: {error}")
+                    
+                    # CRITICAL: If we removed originals before move and move failed,
+                    # try to restore from archive to preserve user data
+                    if source_removed_pre_move and archive_path and archive_path.exists():
+                        self.logger.warning(f"  Attempting to restore originals from archive...")
+                        try:
+                            # Copy archive back to original location
+                            shutil.copytree(archive_path, original_source_path)
+                            self.logger.info(f"  Successfully restored originals from archive to: {original_source_path}")
+                        except Exception as restore_error:
+                            self.logger.error(f"  Failed to restore from archive: {restore_error}")
+                            self.logger.error(f"  IMPORTANT: Your original files are safe in the archive at: {archive_path}")
+                    
                     self.state_manager.update_album_status(
                         album.root_path,
                         AlbumStatus.FAILED,
@@ -980,8 +1079,10 @@ class ConversionOrchestrator:
                             operation_type='finalize',
                             status='failed',
                             error_message=error,
-                            duration_seconds=(datetime.now() - finalize_start).total_seconds()
+                            duration_seconds=(datetime.now() - finalize_start).total_seconds(),
+                            album_id_origin=album_id
                         )
+                        self.database.commit()
                     
                     # Cleanup working directories
                     if cleanup_on_failure:
@@ -991,21 +1092,40 @@ class ConversionOrchestrator:
                 
                 self.logger.info(f"  Moved to: {output_album_path}")
                 
-                # Update database with playback path
+                # Calculate processed_album_id from converted files
+                playback_audio_files = list(output_album_path.glob('*.flac'))
+                processed_album_id = None
+                if playback_audio_files:
+                    try:
+                        processed_album_id = AlbumMetadata.generate_album_id(playback_audio_files)
+                        self.logger.info(f"  Original Album ID: {album_id}")
+                        self.logger.info(f"  Processed Album ID: {processed_album_id}")
+                    except Exception as e:
+                        self.logger.warning(f"  Could not generate processed album ID: {e}")
+                
+                # Update database with playback path and processed_album_id
                 if self.database:
                     self.database.update_album(
                         album_id=album_id,
-                        playback_path=str(output_album_path)
+                        playback_path=str(output_album_path),
+                        processed_album_id=processed_album_id
                     )
+                    self.database.commit()
                 
-                # Create metadata file in output
-                playback_audio_files = list(output_album_path.glob('*.flac'))
+                # Create metadata file in output with both IDs
                 if playback_audio_files:
                     AlbumMetadata.create_for_album(
                         output_album_path,
                         playback_audio_files,
-                        album_id=album_id
+                        album_id=album_id,
+                        processed_album_id=processed_album_id
                     )
+                
+                # Also update archive metadata with processed_album_id
+                if archive_path and archive_path.exists():
+                    archive_metadata = AlbumMetadata(archive_path)
+                    if archive_metadata.exists() and processed_album_id:
+                        archive_metadata.set_processed_album_id(processed_album_id)
                 
                 # Metadata enrichment (optional)
                 if self.metadata_enricher:
@@ -1026,16 +1146,22 @@ class ConversionOrchestrator:
                                 operation_type='enrich',
                                 status='failed',
                                 error_message=error_enrich,
-                                duration_seconds=enrich_duration
+                                duration_seconds=enrich_duration,
+                                album_id_origin=album_id,
+                                album_id_processed=processed_album_id
                             )
+                            self.database.commit()
                     else:
                         if self.database:
                             self.database.add_processing_history(
                                 album_id=album_id,
                                 operation_type='enrich',
                                 status='success',
-                                duration_seconds=enrich_duration
+                                duration_seconds=enrich_duration,
+                                album_id_origin=album_id,
+                                album_id_processed=processed_album_id
                             )
+                            self.database.commit()
                 
                 # Remove source files if configured
                 if self.config.get('processing.remove_source_after_conversion', False) and not source_removed_pre_move:
@@ -1051,8 +1177,11 @@ class ConversionOrchestrator:
                                     album_id=album_id,
                                     operation_type='cleanup',
                                     status='success',
-                                    duration_seconds=0.0
+                                    duration_seconds=0.0,
+                                    album_id_origin=album_id,
+                                    album_id_processed=processed_album_id
                                 )
+                                self.database.commit()
                         except Exception as e:
                             self.logger.warning(f"  Failed to remove source files: {e}")
                             if self.database:
@@ -1061,8 +1190,11 @@ class ConversionOrchestrator:
                                     operation_type='cleanup',
                                     status='failed',
                                     error_message=str(e),
-                                    duration_seconds=0.0
+                                    duration_seconds=0.0,
+                                    album_id_origin=album_id,
+                                    album_id_processed=processed_album_id
                                 )
+                                self.database.commit()
                     else:
                         warning_msg = f"  Skipped source removal - safety check failed (path: {original_source_path})"
                         self.logger.warning(warning_msg)
@@ -1072,8 +1204,11 @@ class ConversionOrchestrator:
                                 operation_type='cleanup',
                                 status='skipped',
                                 error_message="Safety check failed - appears to be working directory",
-                                duration_seconds=0.0
+                                duration_seconds=0.0,
+                                album_id_origin=album_id,
+                                album_id_processed=processed_album_id
                             )
+                            self.database.commit()
             else:
                 self.logger.info("  [DRY RUN] Would move to output and remove source")
             
@@ -1106,6 +1241,7 @@ class ConversionOrchestrator:
                     working_source_path=None,
                     working_processed_path=None
                 )
+                self.database.commit()
             
             self.stats['files_converted'] += files_converted
             self.stats['files_failed'] += files_failed
@@ -1129,14 +1265,79 @@ class ConversionOrchestrator:
                     operation_type='convert',
                     status='failed',
                     error_message=str(e),
-                    duration_seconds=total_duration
+                    duration_seconds=total_duration,
+                    album_id_origin=album_id
                 )
+                self.database.commit()
             
             # Cleanup working directories if configured
             if not self.dry_run and cleanup_on_failure:
                 self.working_dir_manager.cleanup_working_dirs(working_source_path, working_processed_path)
             
             return False
+    
+    def _extract_album_metadata(
+        self,
+        album_path: Path,
+        music_files: list
+    ) -> dict:
+        """
+        Extract album-level metadata from audio files.
+        
+        Priority: SACD metadata > FLAC tags > folder name
+        
+        Args:
+            album_path: Path to album directory
+            music_files: List of music file objects
+            
+        Returns:
+            Dictionary with album metadata (artist, album_name)
+        """
+        metadata = {
+            'artist': None,
+            'album_name': None
+        }
+        
+        # Priority 1: Check for SACD metadata
+        from src.sacd_metadata_parser import find_sacd_metadata_files, parse_sacd_metadata_file
+        sacd_metadata_files = find_sacd_metadata_files(album_path)
+        if sacd_metadata_files:
+            sacd_metadata = parse_sacd_metadata_file(sacd_metadata_files[0])
+            if sacd_metadata:
+                sacd_info = sacd_metadata.get('album', {}) or sacd_metadata.get('disc', {})
+                if sacd_info:
+                    if 'artist' in sacd_info:
+                        metadata['artist'] = sacd_info['artist']
+                    if 'album' in sacd_info or 'title' in sacd_info:
+                        metadata['album_name'] = sacd_info.get('album') or sacd_info.get('title')
+        
+        # Priority 2: Extract from first FLAC file if available
+        if (not metadata['artist'] or not metadata['album_name']) and MutagenFLAC:
+            for music_file in music_files:
+                if music_file.extension.lower() == '.flac' and music_file.path.exists():
+                    try:
+                        audio = MutagenFLAC(str(music_file.path))
+                        
+                        if not metadata['artist'] and 'artist' in audio:
+                            metadata['artist'] = audio['artist'][0]
+                        if not metadata['artist'] and 'albumartist' in audio:
+                            metadata['artist'] = audio['albumartist'][0]
+                        
+                        if not metadata['album_name'] and 'album' in audio:
+                            metadata['album_name'] = audio['album'][0]
+                        
+                        # If we found both, we're done
+                        if metadata['artist'] and metadata['album_name']:
+                            break
+                    except Exception as e:
+                        self.logger.debug(f"Could not extract album metadata from {music_file.path}: {e}")
+                        continue
+        
+        # Priority 3: Fallback to folder name for album name
+        if not metadata['album_name']:
+            metadata['album_name'] = album_path.name
+        
+        return metadata
     
     def _extract_track_metadata(
         self,

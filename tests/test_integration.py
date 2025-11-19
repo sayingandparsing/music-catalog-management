@@ -25,6 +25,223 @@ from main import ConversionOrchestrator
 class TestFullWorkflow:
     """Integration tests for complete conversion workflow."""
     
+    def test_error_handling_preserves_originals(self, temp_dir):
+        """Test that errors during processing preserve original files."""
+        import yaml
+        from unittest.mock import patch, MagicMock
+        from scanner import DirectoryScanner
+        
+        # Create a mock album
+        album_dir = temp_dir / "test_album"
+        album_dir.mkdir()
+        (album_dir / "track01.dsf").write_text("mock dsf")
+        (album_dir / "cover.jpg").write_text("mock image")
+        
+        # Create scanner and scan
+        scanner = DirectoryScanner(music_extensions=['.dsf', '.iso', '.dff'])
+        albums = scanner.scan(album_dir, single_album=True)
+        
+        assert len(albums) == 1
+        album = albums[0]
+        
+        # Create temporary config file
+        config_dict = {
+            'conversion': {
+                'mode': 'iso_dsf_to_flac',
+                'sample_rate': 88200,
+                'bit_depth': 24,
+                'flac_standardization': {'enabled': False},
+                'flac_compression_level': 8,
+                'preserve_metadata': True,
+                'audio_filter': {
+                    'resampler': 'soxr',
+                    'soxr_precision': 28,
+                    'dither_method': 'triangular',
+                    'lowpass_freq': 40000
+                }
+            },
+            'paths': {
+                'input_dir': str(temp_dir),
+                'archive_dir': str(temp_dir / 'archive'),
+                'output_dir': str(temp_dir / 'output'),
+                'working_dir': str(temp_dir / 'working')
+            },
+            'processing': {
+                'max_retries': 1,
+                'skip_album_on_error': True,
+                'remove_source_after_conversion': True,
+                'ffmpeg_threads': 0,
+                'skip_processed': False,
+                'verify_checksums': False,
+                'calculate_dynamic_range': False,
+                'cleanup_working_on_success': True,
+                'cleanup_working_on_failure': True,
+                'resume_from_working': False
+            },
+            'database': {'enabled': False},
+            'metadata': {'enabled': False},
+            'files': {
+                'music_extensions': ['.dsf', '.iso', '.dff'],
+                'copy_extensions': ['.jpg', '.jpeg', '.png']
+            },
+            'logging': {
+                'level': 'INFO',
+                'log_file': 'conversion.log',
+                'error_log_file': 'conversion_errors.log',
+                'console_timestamps': False
+            }
+        }
+        
+        config_file = temp_dir / "test_config.yaml"
+        with open(config_file, 'w') as f:
+            yaml.dump(config_dict, f)
+        
+        config = Config(config_file)
+        logger = setup_logger(level='INFO')
+        
+        orchestrator = ConversionOrchestrator(
+            config=config,
+            logger=logger,
+            dry_run=False
+        )
+        
+        # Mock converter to simulate failure
+        def mock_convert_file_fail(*args, **kwargs):
+            return False, "Conversion failed", 0.0, None
+        
+        with patch.object(orchestrator.converter, 'convert_file', side_effect=mock_convert_file_fail):
+            output_dir = temp_dir / 'output'
+            output_dir.mkdir(exist_ok=True)
+            
+            # Process album (should fail during conversion)
+            success = orchestrator._process_album(album, output_dir)
+            
+            # Should fail
+            assert success is False
+            
+            # Original files should still exist (not archived, not deleted)
+            assert (album_dir / "track01.dsf").exists(), "Original file should exist after conversion failure"
+            assert (album_dir / "cover.jpg").exists(), "Non-music file should exist after conversion failure"
+            
+            # Archive should NOT exist
+            archive_dir = temp_dir / 'archive'
+            if archive_dir.exists():
+                archives = list(archive_dir.iterdir())
+                assert len(archives) == 0, "No archive should be created on conversion failure"
+    
+    def test_skip_albums_with_no_convertible_files(self, temp_dir):
+        """Test that albums with only FLAC files are skipped when standardization is disabled."""
+        import yaml
+        from scanner import DirectoryScanner, Album, MusicFile
+        
+        # Create a mock album with only FLAC files
+        flac_album_dir = temp_dir / "flac_album"
+        flac_album_dir.mkdir()
+        
+        # Create some FLAC files
+        (flac_album_dir / "track01.flac").write_text("mock flac")
+        (flac_album_dir / "track02.flac").write_text("mock flac")
+        (flac_album_dir / "cover.jpg").write_text("mock image")
+        
+        # Create scanner and scan the album
+        scanner = DirectoryScanner(music_extensions=['.flac', '.iso', '.dsf', '.dff'])
+        albums = scanner.scan(flac_album_dir, single_album=True)
+        
+        assert len(albums) == 1
+        album = albums[0]
+        assert len(album.music_files) == 2
+        
+        # Create temporary config file with FLAC standardization disabled
+        config_dict = {
+            'conversion': {
+                'mode': 'iso_dsf_to_flac',
+                'sample_rate': 88200,
+                'bit_depth': 24,
+                'flac_standardization': {
+                    'enabled': False
+                },
+                'flac_compression_level': 8,
+                'preserve_metadata': True,
+                'audio_filter': {
+                    'resampler': 'soxr',
+                    'soxr_precision': 28,
+                    'dither_method': 'triangular',
+                    'lowpass_freq': 40000
+                }
+            },
+            'paths': {
+                'input_dir': str(temp_dir),
+                'archive_dir': str(temp_dir / 'archive'),
+                'output_dir': str(temp_dir / 'output'),
+                'working_dir': str(temp_dir / 'working')
+            },
+            'processing': {
+                'max_retries': 3,
+                'skip_album_on_error': True,
+                'remove_source_after_conversion': False,
+                'ffmpeg_threads': 0,
+                'skip_processed': False,
+                'verify_checksums': False,
+                'calculate_dynamic_range': False,
+                'cleanup_working_on_success': True,
+                'cleanup_working_on_failure': False,
+                'resume_from_working': False
+            },
+            'database': {
+                'enabled': False
+            },
+            'metadata': {
+                'enabled': False
+            },
+            'files': {
+                'music_extensions': ['.flac', '.iso', '.dsf', '.dff'],
+                'copy_extensions': ['.jpg', '.jpeg', '.png']
+            },
+            'logging': {
+                'level': 'INFO',
+                'log_file': 'conversion.log',
+                'error_log_file': 'conversion_errors.log',
+                'console_timestamps': False
+            }
+        }
+        
+        # Write config to temporary file
+        config_file = temp_dir / "test_config.yaml"
+        with open(config_file, 'w') as f:
+            yaml.dump(config_dict, f)
+        
+        config = Config(config_file)
+        logger = setup_logger(level='INFO')
+        
+        # Create orchestrator
+        orchestrator = ConversionOrchestrator(
+            config=config,
+            logger=logger,
+            dry_run=False
+        )
+        
+        # Check that album has no convertible files
+        has_convertible = orchestrator._has_convertible_files(album)
+        assert has_convertible is False, "Album with only FLAC files should not have convertible files when standardization is disabled"
+        
+        # Process albums and verify it was skipped
+        output_dir = temp_dir / 'output'
+        output_dir.mkdir(exist_ok=True)
+        
+        result = orchestrator._process_albums([album], output_dir)
+        
+        # Album should be skipped, so stats should reflect that
+        assert orchestrator.stats['albums_skipped'] == 1
+        assert orchestrator.stats['albums_processed'] == 0
+        
+        # Working directory should not be created
+        working_dirs = list((temp_dir / 'working').glob('*')) if (temp_dir / 'working').exists() else []
+        assert len(working_dirs) == 0, "Working directories should not be created for skipped albums"
+        
+        # Original files should still exist
+        assert (flac_album_dir / "track01.flac").exists()
+        assert (flac_album_dir / "track02.flac").exists()
+    
     def test_scan_archive_workflow(
         self,
         test_album_path,

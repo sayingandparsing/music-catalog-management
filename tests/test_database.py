@@ -250,3 +250,55 @@ def test_get_statistics(temp_db):
     assert stats['total_tracks'] == 1
     assert stats['total_artists'] == 2
 
+
+def test_create_album_with_processed_id(temp_db):
+    """Test creating album with processed_album_id."""
+    album_id = "original-id-123"
+    processed_id = "processed-id-456"
+    
+    success = temp_db.create_album(
+        album_id=album_id,
+        album_name="Test Album",
+        source_path="/test/path",
+        audio_files_checksum="abc123",
+        processed_album_id=processed_id
+    )
+    
+    assert success
+    
+    # Verify both IDs are stored
+    album = temp_db.get_album_by_id(album_id)
+    assert album is not None
+    assert album['album_id'] == album_id
+    assert album['processed_album_id'] == processed_id
+
+
+def test_update_album_with_processed_id(temp_db):
+    """Test updating album with processed_album_id."""
+    album_id = "original-id-789"
+    
+    # Create album without processed ID
+    temp_db.create_album(
+        album_id=album_id,
+        album_name="Test Album",
+        source_path="/test/path",
+        audio_files_checksum="abc123"
+    )
+    
+    # Verify no processed ID initially
+    album = temp_db.get_album_by_id(album_id)
+    assert album['processed_album_id'] is None
+    
+    # Update with processed ID
+    processed_id = "processed-id-updated"
+    success = temp_db.update_album(
+        album_id=album_id,
+        processed_album_id=processed_id
+    )
+    
+    assert success
+    
+    # Verify processed ID is now set
+    album = temp_db.get_album_by_id(album_id)
+    assert album['processed_album_id'] == processed_id
+

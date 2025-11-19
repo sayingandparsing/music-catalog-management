@@ -14,6 +14,9 @@ This directory contains detailed documentation for the DSD Music Converter proje
 
 - **[WORKING_DIRECTORY_IMPLEMENTATION.md](WORKING_DIRECTORY_IMPLEMENTATION.md)** - Technical details on the working directory system and multi-stage processing
 - **[SACD_METADATA_ERROR_HANDLING.md](SACD_METADATA_ERROR_HANDLING.md)** - Details on SACD metadata parsing and error handling
+- **[DATABASE_IMPROVEMENTS_SUMMARY.md](DATABASE_IMPROVEMENTS_SUMMARY.md)** - Complete overview of database persistence and metadata improvements
+- **[DATABASE_PERSISTENCE_FIX.md](DATABASE_PERSISTENCE_FIX.md)** - Database commit handling and persistence fix details
+- **[METADATA_EXTRACTION_IMPROVEMENTS.md](METADATA_EXTRACTION_IMPROVEMENTS.md)** - Metadata extraction and processing history enhancements
 - **[TEST_COVERAGE_SUMMARY.md](TEST_COVERAGE_SUMMARY.md)** - Test coverage information and testing strategy
 
 ### Development & Maintenance
@@ -32,8 +35,9 @@ This directory contains detailed documentation for the DSD Music Converter proje
 
 ### For Developers
 1. Review [WORKING_DIRECTORY_IMPLEMENTATION.md](WORKING_DIRECTORY_IMPLEMENTATION.md) for architecture details
-2. Check [TEST_COVERAGE_SUMMARY.md](TEST_COVERAGE_SUMMARY.md) for testing information
-3. See [BUG_FIXES_IMPLEMENTED.md](BUG_FIXES_IMPLEMENTED.md) for recent improvements
+2. Check [DATABASE_IMPROVEMENTS_SUMMARY.md](DATABASE_IMPROVEMENTS_SUMMARY.md) for database schema and improvements
+3. Check [TEST_COVERAGE_SUMMARY.md](TEST_COVERAGE_SUMMARY.md) for testing information
+4. See [BUG_FIXES_IMPLEMENTED.md](BUG_FIXES_IMPLEMENTED.md) for recent improvements
 
 ### For Troubleshooting
 1. Check the main README's Troubleshooting section

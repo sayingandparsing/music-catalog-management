@@ -25,7 +25,7 @@ class MusicDatabase:
         'allmusic_rating', 'source_path', 'archive_path', 'playback_path',
         'audio_files_checksum', 'processed_at', 'conversion_mode',
         'sample_rate', 'bit_depth', 'processing_stage',
-        'working_source_path', 'working_processed_path'
+        'working_source_path', 'working_processed_path', 'processed_album_id'
     }
     
     # Whitelist of valid track field names
@@ -53,10 +53,14 @@ class MusicDatabase:
     
     def _create_tables(self):
         """Create database tables if they don't exist."""
+        # First, run any necessary migrations for existing databases
+        self._run_migrations()
+        
         # Albums table
         self.conn.execute("""
             CREATE TABLE IF NOT EXISTS albums (
                 album_id VARCHAR PRIMARY KEY,
+                processed_album_id VARCHAR,
                 album_name VARCHAR,
                 artist VARCHAR,
                 release_year INTEGER,
@@ -126,6 +130,8 @@ class MusicDatabase:
             CREATE TABLE IF NOT EXISTS processing_history (
                 history_id VARCHAR PRIMARY KEY,
                 album_id VARCHAR,
+                album_id_origin VARCHAR,
+                album_id_processed VARCHAR,
                 operation_type VARCHAR,
                 status VARCHAR,
                 error_message VARCHAR,
@@ -163,9 +169,61 @@ class MusicDatabase:
             ON processing_history(album_id)
         """)
     
+    def _run_migrations(self):
+        """Run database migrations for schema updates."""
+        try:
+            # Check if processing_history table exists
+            result = self.conn.execute("""
+                SELECT COUNT(*) 
+                FROM information_schema.tables 
+                WHERE table_name = 'processing_history'
+            """).fetchone()
+            
+            if result and result[0] > 0:
+                # Table exists, check if new columns exist
+                columns = self.conn.execute("""
+                    SELECT column_name 
+                    FROM information_schema.columns 
+                    WHERE table_name = 'processing_history'
+                """).fetchall()
+                
+                existing_columns = [col[0] for col in columns]
+                
+                # Add album_id_origin column if it doesn't exist
+                if 'album_id_origin' not in existing_columns:
+                    print("Migrating database: Adding album_id_origin column to processing_history...")
+                    self.conn.execute("""
+                        ALTER TABLE processing_history 
+                        ADD COLUMN album_id_origin VARCHAR
+                    """)
+                    print("  ✓ Added album_id_origin column")
+                
+                # Add album_id_processed column if it doesn't exist
+                if 'album_id_processed' not in existing_columns:
+                    print("Migrating database: Adding album_id_processed column to processing_history...")
+                    self.conn.execute("""
+                        ALTER TABLE processing_history 
+                        ADD COLUMN album_id_processed VARCHAR
+                    """)
+                    print("  ✓ Added album_id_processed column")
+                
+                # Commit the migrations
+                self.conn.commit()
+                
+        except Exception as e:
+            print(f"Warning: Error during database migration: {e}")
+            # Don't fail on migration errors - table might not exist yet
+    
+    def commit(self):
+        """Commit current transaction."""
+        if self.conn:
+            self.conn.commit()
+    
     def close(self):
         """Close database connection."""
         if self.conn:
+            # Ensure all changes are committed before closing
+            self.conn.commit()
             self.conn.close()
             self.conn = None
     
@@ -205,7 +263,7 @@ class MusicDatabase:
             
             self.conn.execute("""
                 INSERT INTO albums (
-                    album_id, album_name, source_path, audio_files_checksum,
+                    album_id, processed_album_id, album_name, source_path, audio_files_checksum,
                     processed_at, updated_at,
                     artist, release_year, recording_year, remaster_year,
                     label, label_original, release_series, catalog_number, genre,
@@ -213,9 +271,9 @@ class MusicDatabase:
                     allmusic_rating, archive_path, playback_path,
                     conversion_mode, sample_rate, bit_depth,
                     processing_stage, working_source_path, working_processed_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, [
-                album_id, album_name, source_path, audio_files_checksum,
+                album_id, kwargs.get('processed_album_id'), album_name, source_path, audio_files_checksum,
                 now, now,
                 kwargs.get('artist'),
                 kwargs.get('release_year'),
@@ -583,7 +641,9 @@ class MusicDatabase:
         duration_seconds: Optional[float] = None,
         error_message: Optional[str] = None,
         working_source_path: Optional[str] = None,
-        working_processed_path: Optional[str] = None
+        working_processed_path: Optional[str] = None,
+        album_id_origin: Optional[str] = None,
+        album_id_processed: Optional[str] = None
     ) -> bool:
         """
         Add a processing history record.
@@ -596,6 +656,8 @@ class MusicDatabase:
             error_message: Error message if failed
             working_source_path: Path to working source directory
             working_processed_path: Path to working processed directory
+            album_id_origin: Original album ID (from source files)
+            album_id_processed: Processed album ID (from converted files)
             
         Returns:
             True if successful
@@ -606,14 +668,14 @@ class MusicDatabase:
             
             self.conn.execute("""
                 INSERT INTO processing_history (
-                    history_id, album_id, operation_type, status,
-                    error_message, duration_seconds, processed_at,
-                    working_source_path, working_processed_path
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    history_id, album_id, album_id_origin, album_id_processed,
+                    operation_type, status, error_message, duration_seconds,
+                    processed_at, working_source_path, working_processed_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, [
-                history_id, album_id, operation_type, status,
-                error_message, duration_seconds, now,
-                working_source_path, working_processed_path
+                history_id, album_id, album_id_origin, album_id_processed,
+                operation_type, status, error_message, duration_seconds,
+                now, working_source_path, working_processed_path
             ])
             
             return True
