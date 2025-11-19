@@ -324,6 +324,13 @@ class ConversionOrchestrator:
                 self.logger.info(f"  No convertible files found (contains: {file_types})")
                 self.stats['albums_skipped'] += 1
                 continue
+
+            # Skip albums that contain both ISO images and FLAC files
+            if self._contains_iso_and_flac(album):
+                self.logger.info(f"\n[{idx}/{total_albums}] Skipping album: {album.root_path.name}")
+                self.logger.info("  Found both ISO images and FLAC files in the same album; skipping to avoid mixed-format issues")
+                self.stats['albums_skipped'] += 1
+                continue
             
             # Check if album should be skipped (already processed)
             if self.skip_processed and self.dedup_manager:
@@ -386,6 +393,20 @@ class ConversionOrchestrator:
                 return True
         
         return False
+
+    def _contains_iso_and_flac(self, album: Album) -> bool:
+        """
+        Check if the album contains both ISO images and FLAC files.
+
+        Args:
+            album: Album to check
+
+        Returns:
+            True if both ISO and FLAC files are present
+        """
+        has_iso = any(f.extension.lower() == '.iso' for f in album.music_files)
+        has_flac = any(f.extension.lower() == '.flac' for f in album.music_files)
+        return has_iso and has_flac
     
     def _process_album(self, album: Album, output_dir: Path) -> bool:
         """

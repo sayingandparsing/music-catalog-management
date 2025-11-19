@@ -45,10 +45,10 @@ conversion:
 # Paths
 paths:
   # Input directory containing music files to convert (required)
-  input_dir: /Volumes/PrimaryHD_8TB/ConversionTest/IN
+  input_dir: /Volumes/PrimaryHD_8TB/Media/Music
   
   # Archive location for original files (required)
-  archive_dir: /Volumes/PrimaryHD_8TB/ConversionTest/Archive
+  archive_dir: /Volumes/PrimaryHD_8TB/MusicArchive
   
   # Output directory (null = same as input)
   output_dir: null
