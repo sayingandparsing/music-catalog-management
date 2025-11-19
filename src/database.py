@@ -48,6 +48,7 @@ class MusicDatabase:
                 label_original VARCHAR,
                 release_series VARCHAR,
                 catalog_number VARCHAR,
+                genre VARCHAR,
                 mastering_engineer VARCHAR,
                 recording_engineer VARCHAR,
                 recording_studio VARCHAR,
@@ -60,7 +61,10 @@ class MusicDatabase:
                 updated_at TIMESTAMP,
                 conversion_mode VARCHAR,
                 sample_rate INTEGER,
-                bit_depth INTEGER
+                bit_depth INTEGER,
+                processing_stage VARCHAR,
+                working_source_path VARCHAR,
+                working_processed_path VARCHAR
             )
         """)
         
@@ -75,6 +79,7 @@ class MusicDatabase:
                 file_path VARCHAR,
                 file_size BIGINT,
                 file_format VARCHAR,
+                genre VARCHAR,
                 dynamic_range_crest DECIMAL(6, 2),
                 dynamic_range_r128 DECIMAL(6, 2),
                 musicians JSON,
@@ -108,6 +113,8 @@ class MusicDatabase:
                 error_message VARCHAR,
                 duration_seconds DECIMAL(10, 2),
                 processed_at TIMESTAMP,
+                working_source_path VARCHAR,
+                working_processed_path VARCHAR,
                 FOREIGN KEY (album_id) REFERENCES albums(album_id)
             )
         """)
@@ -183,11 +190,12 @@ class MusicDatabase:
                     album_id, album_name, source_path, audio_files_checksum,
                     processed_at, updated_at,
                     artist, release_year, recording_year, remaster_year,
-                    label, label_original, release_series, catalog_number,
+                    label, label_original, release_series, catalog_number, genre,
                     mastering_engineer, recording_engineer, recording_studio,
                     allmusic_rating, archive_path, playback_path,
-                    conversion_mode, sample_rate, bit_depth
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    conversion_mode, sample_rate, bit_depth,
+                    processing_stage, working_source_path, working_processed_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, [
                 album_id, album_name, source_path, audio_files_checksum,
                 now, now,
@@ -199,6 +207,7 @@ class MusicDatabase:
                 kwargs.get('label_original'),
                 kwargs.get('release_series'),
                 kwargs.get('catalog_number'),
+                kwargs.get('genre'),
                 kwargs.get('mastering_engineer'),
                 kwargs.get('recording_engineer'),
                 kwargs.get('recording_studio'),
@@ -207,7 +216,10 @@ class MusicDatabase:
                 kwargs.get('playback_path'),
                 kwargs.get('conversion_mode'),
                 kwargs.get('sample_rate'),
-                kwargs.get('bit_depth')
+                kwargs.get('bit_depth'),
+                kwargs.get('processing_stage'),
+                kwargs.get('working_source_path'),
+                kwargs.get('working_processed_path')
             ])
             
             return True
@@ -360,15 +372,16 @@ class MusicDatabase:
             self.conn.execute("""
                 INSERT INTO tracks (
                     track_id, album_id, track_number, title, file_path,
-                    duration_seconds, file_size, file_format,
+                    duration_seconds, file_size, file_format, genre,
                     dynamic_range_crest, dynamic_range_r128,
                     musicians, processed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, [
                 track_id, album_id, track_number, title, file_path,
                 kwargs.get('duration_seconds'),
                 kwargs.get('file_size'),
                 kwargs.get('file_format'),
+                kwargs.get('genre'),
                 kwargs.get('dynamic_range_crest'),
                 kwargs.get('dynamic_range_r128'),
                 musicians,
@@ -540,7 +553,9 @@ class MusicDatabase:
         operation_type: str,
         status: str,
         duration_seconds: Optional[float] = None,
-        error_message: Optional[str] = None
+        error_message: Optional[str] = None,
+        working_source_path: Optional[str] = None,
+        working_processed_path: Optional[str] = None
     ) -> bool:
         """
         Add a processing history record.
@@ -551,6 +566,8 @@ class MusicDatabase:
             status: Status (success/failed/skipped)
             duration_seconds: Operation duration
             error_message: Error message if failed
+            working_source_path: Path to working source directory
+            working_processed_path: Path to working processed directory
             
         Returns:
             True if successful
@@ -562,11 +579,13 @@ class MusicDatabase:
             self.conn.execute("""
                 INSERT INTO processing_history (
                     history_id, album_id, operation_type, status,
-                    error_message, duration_seconds, processed_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    error_message, duration_seconds, processed_at,
+                    working_source_path, working_processed_path
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, [
                 history_id, album_id, operation_type, status,
-                error_message, duration_seconds, now
+                error_message, duration_seconds, now,
+                working_source_path, working_processed_path
             ])
             
             return True

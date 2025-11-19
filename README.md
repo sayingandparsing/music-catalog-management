@@ -11,6 +11,7 @@ A robust Python CLI utility for converting DSD audio files (ISO/DSF) to FLAC or 
 - **Pause/Resume**: Pause conversion between albums and resume later
 - **Album-Level Processing**: Preserves directory structure and handles albums as units
 - **Automatic Archiving**: Backs up original files before conversion
+- **Source File Cleanup**: Optional automatic removal of originals after successful archiving and conversion
 - **Configurable Sample Rates**: Support for 24/88.2, 24/96, 24/176.4, 24/192
 - **Metadata Preservation**: Automatically copies metadata from source files
 - **Metadata Enrichment**: Optional integration with MusicBrainz and Discogs
@@ -127,12 +128,30 @@ processing:
   max_retries: 3
   skip_album_on_error: true
   check_pause: true
+  remove_source_after_conversion: false  # Set to true to delete originals after conversion
 
 logging:
   level: INFO
   log_file: conversion.log
   error_log_file: conversion_errors.log
 ```
+
+### Source File Cleanup
+
+⚠️ **New Feature**: Automatic removal of source files after successful conversion
+
+When `remove_source_after_conversion: true` is set in your config, the tool will:
+1. Archive original files (with verification)
+2. Convert files to output directory
+3. **Delete the original files from the input directory**
+
+**Safety recommendations:**
+- Start with this feature **disabled** (`false`)
+- Test with a few albums first
+- Verify your archive is complete and backed up
+- Only enable once you trust the workflow
+
+See [WORKFLOW_GUIDE.md](WORKFLOW_GUIDE.md) for detailed information.
 
 ### Custom Configuration
 

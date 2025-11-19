@@ -47,6 +47,9 @@ class AlbumConversionState:
     started_at: Optional[str] = None
     completed_at: Optional[str] = None
     error_message: Optional[str] = None
+    processing_stage: Optional[str] = None  # preparing, converting, archiving, finalizing, completed
+    working_source_path: Optional[str] = None
+    working_processed_path: Optional[str] = None
 
 
 @dataclass
@@ -172,7 +175,10 @@ class StateManager:
                     ],
                     started_at=a.get('started_at'),
                     completed_at=a.get('completed_at'),
-                    error_message=a.get('error_message')
+                    error_message=a.get('error_message'),
+                    processing_stage=a.get('processing_stage'),
+                    working_source_path=a.get('working_source_path'),
+                    working_processed_path=a.get('working_processed_path')
                 )
                 for a in data.get('albums', [])
             ]
@@ -225,6 +231,9 @@ class StateManager:
                     'started_at': a.started_at,
                     'completed_at': a.completed_at,
                     'error_message': a.error_message,
+                    'processing_stage': a.processing_stage,
+                    'working_source_path': a.working_source_path,
+                    'working_processed_path': a.working_processed_path,
                     'files': [
                         {
                             'source_path': f.source_path,
@@ -291,7 +300,10 @@ class StateManager:
         album_path: Path,
         status: AlbumStatus,
         archive_path: Optional[Path] = None,
-        error_message: Optional[str] = None
+        error_message: Optional[str] = None,
+        processing_stage: Optional[str] = None,
+        working_source_path: Optional[Path] = None,
+        working_processed_path: Optional[Path] = None
     ):
         """
         Update album status.
@@ -301,6 +313,9 @@ class StateManager:
             status: New status
             archive_path: Archive path (optional)
             error_message: Error message if failed (optional)
+            processing_stage: Current processing stage (optional)
+            working_source_path: Working source directory path (optional)
+            working_processed_path: Working processed directory path (optional)
         """
         if not self.session:
             return
@@ -312,6 +327,12 @@ class StateManager:
                     album.archive_path = str(archive_path)
                 if error_message:
                     album.error_message = error_message
+                if processing_stage:
+                    album.processing_stage = processing_stage
+                if working_source_path:
+                    album.working_source_path = str(working_source_path)
+                if working_processed_path:
+                    album.working_processed_path = str(working_processed_path)
                 if status in [AlbumStatus.COMPLETED, AlbumStatus.FAILED, AlbumStatus.SKIPPED]:
                     album.completed_at = datetime.now().isoformat()
                 break
@@ -366,6 +387,53 @@ class StateManager:
         return [
             album for album in self.session.albums
             if album.status in [AlbumStatus.PENDING.value, AlbumStatus.FAILED.value]
+        ]
+    
+    def get_resumable_albums(self) -> List[AlbumConversionState]:
+        """
+        Get albums that can be resumed from working directories.
+        
+        These are albums that have working directories and are in a
+        resumable state (converting, archiving, finalizing, or failed states).
+        
+        Returns:
+            List of resumable album states
+        """
+        if not self.session:
+            return []
+        
+        resumable_stages = ['preparing', 'converting', 'archiving', 'finalizing']
+        resumable_statuses = [
+            AlbumStatus.PENDING.value,
+            AlbumStatus.ARCHIVING.value,
+            AlbumStatus.CONVERTING.value,
+            AlbumStatus.FAILED.value
+        ]
+        
+        return [
+            album for album in self.session.albums
+            if (album.status in resumable_statuses or 
+                album.processing_stage in resumable_stages) and
+               (album.working_source_path or album.working_processed_path)
+        ]
+    
+    def get_albums_needing_cleanup(self) -> List[AlbumConversionState]:
+        """
+        Get albums that have working directories that need cleanup.
+        
+        These are albums that are completed or permanently failed and
+        still have working directories.
+        
+        Returns:
+            List of album states needing cleanup
+        """
+        if not self.session:
+            return []
+        
+        return [
+            album for album in self.session.albums
+            if album.status in [AlbumStatus.COMPLETED.value, AlbumStatus.SKIPPED.value] and
+               (album.working_source_path or album.working_processed_path)
         ]
     
     def check_pause_signal(self) -> bool:

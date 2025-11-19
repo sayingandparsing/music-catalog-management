@@ -43,6 +43,11 @@ paths:
   
   # Output directory (null = same as input directory)
   output_dir: null
+  
+  # Working directory for temporary processing
+  # Albums are copied here during conversion for atomic operations
+  # Default: ./working (relative to current directory)
+  working_dir: ./working
 
 # Metadata Enrichment (optional)
 metadata:
@@ -88,6 +93,24 @@ processing:
   
   # Pause signal file location
   pause_signal_file: .state/PAUSE
+  
+  # Remove source files after successful archiving and conversion
+  # CAUTION: This permanently deletes the originals from input directory
+  # Only use if you trust your archive and conversion process
+  # Recommended: Start with false, verify your workflow, then enable
+  remove_source_after_conversion: false
+  
+  # Working directory management
+  # Clean up working directories after successful conversion
+  cleanup_working_on_success: true
+  
+  # Clean up working directories after failed conversion
+  # Set to false to keep working directories for resume/debugging
+  cleanup_working_on_failure: false
+  
+  # Resume from working directories on --resume
+  # If true, checks for existing working directories and continues from there
+  resume_from_working: true
 
 # Logging
 logging:

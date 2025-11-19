@@ -48,7 +48,12 @@ paths:
   archive_dir: /Volumes/PrimaryHD_8TB/ConversionTest/Archive
   
   # Output directory (null = same as input)
-  output_dir: /Volumes/PrimaryHD_8TB/ConversionTest/Output
+  output_dir: null
+  
+  # Working directory for temporary processing
+  # Albums are copied here during conversion for atomic operations
+  # Default: ./working (relative to current directory)
+  working_dir: ./working
 
 # Database Settings
 database:
@@ -100,6 +105,11 @@ processing:
   # Pause signal file location
   pause_signal_file: .state/PAUSE
   
+  # Remove source files after successful archiving and conversion
+  # CAUTION: This permanently deletes the originals from input directory
+  # Only use if you trust your archive and conversion process
+  remove_source_after_conversion: true
+  
   # Mac Mini M1 Optimization: FFmpeg threads (8 cores: 4 performance + 4 efficiency)
   ffmpeg_threads: 8
   
@@ -111,6 +121,18 @@ processing:
   
   # Calculate dynamic range metrics during conversion
   calculate_dynamic_range: true
+  
+  # Working directory management
+  # Clean up working directories after successful conversion
+  cleanup_working_on_success: true
+  
+  # Clean up working directories after failed conversion
+  # Set to false to keep working directories for resume/debugging
+  cleanup_working_on_failure: false
+  
+  # Resume from working directories on --resume
+  # If true, checks for existing working directories and continues from there
+  resume_from_working: true
 
 # I/O Optimization for External Drives
 io:

@@ -107,7 +107,8 @@ class AudioConverter:
         self,
         input_path: Path,
         output_path: Path,
-        overwrite: bool = False
+        overwrite: bool = False,
+        skip_existing: bool = False
     ) -> Tuple[bool, Optional[str], float, Optional[Dict[str, Any]]]:
         """
         Convert a single audio file.
@@ -116,6 +117,7 @@ class AudioConverter:
             input_path: Input file path
             output_path: Output file path
             overwrite: Whether to overwrite existing output file
+            skip_existing: If True, skip conversion if output exists (for resume)
             
         Returns:
             Tuple of (success, error_message, duration_seconds, dynamic_range_metrics)
@@ -125,8 +127,12 @@ class AudioConverter:
             return False, f"Input file not found: {input_path}", 0.0, None
         
         # Check output
-        if output_path.exists() and not overwrite:
-            return False, f"Output file already exists: {output_path}", 0.0, None
+        if output_path.exists():
+            if skip_existing:
+                # Skip this file - already converted (resume scenario)
+                return True, "Already converted (skipped)", 0.0, None
+            elif not overwrite:
+                return False, f"Output file already exists: {output_path}", 0.0, None
         
         # Create output directory
         output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -364,7 +370,7 @@ class AudioConverter:
         self,
         input_path: Path,
         temp_dir: Path
-    ) -> Tuple[bool, Optional[str], List[Path]]:
+    ) -> Tuple[bool, Optional[str], List[Path], Optional[Path]]:
         """
         Extract DSD audio from SACD ISO to DSF files using sacd_extract.
         
@@ -373,10 +379,10 @@ class AudioConverter:
             temp_dir: Temporary directory for extraction
             
         Returns:
-            Tuple of (success, error_message, list_of_extracted_dsf_files)
+            Tuple of (success, error_message, list_of_extracted_dsf_files, metadata_file_path)
         """
         if not self.has_sacd_extract:
-            return False, "sacd_extract not found. Install it to process ISO files.", []
+            return False, "sacd_extract not found. Install it to process ISO files.", [], None
         
         try:
             # Extract stereo tracks to DSF format
@@ -403,7 +409,7 @@ class AudioConverter:
             
             if result.returncode != 0:
                 error_msg = result.stderr.strip() or result.stdout.strip()
-                return False, f"sacd_extract failed: {error_msg}", []
+                return False, f"sacd_extract failed: {error_msg}", [], None
             
             # Find all extracted DSF files (sacd_extract creates them in a subdirectory)
             dsf_files = sorted(temp_dir.rglob('*.dsf'))
@@ -411,14 +417,28 @@ class AudioConverter:
             if not dsf_files:
                 # Debug: show what we found and the sacd_extract output
                 all_files = list(temp_dir.rglob('*'))
-                return False, f"No DSF files were extracted from ISO. Found {len(all_files)} files in temp dir. Output: {result.stdout[:200]}", []
+                return False, f"No DSF files were extracted from ISO. Found {len(all_files)} files in temp dir. Output: {result.stdout[:200]}", [], None
             
-            return True, None, dsf_files
+            # Look for SACD metadata text files
+            metadata_file = None
+            txt_files = list(temp_dir.rglob('*.txt'))
+            for txt_file in txt_files:
+                # Check if it contains SACD metadata markers
+                try:
+                    with open(txt_file, 'r', encoding='utf-8', errors='ignore') as f:
+                        content = f.read(1000)
+                        if any(marker in content for marker in ['Disc Information:', 'Album Information:', 'Track list']):
+                            metadata_file = txt_file
+                            break
+                except Exception:
+                    continue
+            
+            return True, None, dsf_files, metadata_file
             
         except subprocess.TimeoutExpired:
-            return False, "ISO extraction timeout (exceeded 30 minutes)", []
+            return False, "ISO extraction timeout (exceeded 30 minutes)", [], None
         except Exception as e:
-            return False, f"Error extracting ISO: {e}", []
+            return False, f"Error extracting ISO: {e}", [], None
     
     def _convert_iso_to_flac(
         self,
@@ -445,7 +465,7 @@ class AudioConverter:
             temp_dir = Path(temp_dir_str)
             
             # Extract ISO to DSF files
-            success, error, dsf_files = self._extract_iso_to_dsf(input_path, temp_dir)
+            success, error, dsf_files, metadata_file = self._extract_iso_to_dsf(input_path, temp_dir)
             
             if not success:
                 return False, error
@@ -498,7 +518,7 @@ class AudioConverter:
             temp_dir = Path(temp_dir_str)
             
             # Extract ISO to DSF files
-            success, error, dsf_files = self._extract_iso_to_dsf(input_path, temp_dir)
+            success, error, dsf_files, metadata_file = self._extract_iso_to_dsf(input_path, temp_dir)
             
             if not success:
                 return False, error
