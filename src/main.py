@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 import click
 from datetime import datetime, timedelta
+import shutil
 
 from src.config import Config
 from src.logger import setup_logger, ConversionLogger
@@ -21,7 +22,7 @@ from src.database import MusicDatabase
 from src.album_metadata import AlbumMetadata
 from src.deduplication import DeduplicationManager
 from src.working_directory import WorkingDirectoryManager
-from src.sacd_metadata_parser import parse_sacd_metadata_file, find_sacd_metadata_files
+from src.sacd_metadata_parser import parse_sacd_metadata_file, find_sacd_metadata_files, write_sacd_metadata_to_flac
 import uuid
 
 try:
@@ -184,10 +185,6 @@ class ConversionOrchestrator:
             
             self.logger.log_conversion_end(success, self.stats)
             
-            # Close database connection
-            if self.database:
-                self.database.close()
-            
             return success
             
         except KeyboardInterrupt:
@@ -197,6 +194,10 @@ class ConversionOrchestrator:
         except Exception as e:
             self.logger.error(f"Unexpected error: {e}", exc_info=True)
             return False
+        finally:
+            # Always close database connection on exit (normal or error)
+            if self.database:
+                self.database.close()
     
     def _scan_and_initialize(
         self,
@@ -373,18 +374,22 @@ class ConversionOrchestrator:
         # Determine the original source path (may differ from album.root_path during resume)
         # This is the path we should use for source removal, not album.root_path
         original_source_path = album.root_path
+        source_removed_pre_move = False
+        self.logger.debug(f"  album.root_path: {album.root_path}")
         if self.state_manager.session:
             for album_state in self.state_manager.session.albums:
+                self.logger.debug(f"  Checking album_state: album_path={album_state.album_path}, working_source={album_state.working_source_path}")
                 # Check if album.root_path is a working directory
                 if (album_state.working_source_path and 
                     str(album.root_path) == album_state.working_source_path):
                     # Found match - use the stored original path
                     original_source_path = Path(album_state.album_path)
-                    self.logger.debug(f"  Resuming from working directory, original source: {original_source_path}")
+                    self.logger.info(f"  Resuming from working directory, original source: {original_source_path}")
                     break
                 # Also check if album.root_path matches the original album_path
                 elif str(album.root_path) == album_state.album_path:
                     original_source_path = album.root_path
+                    self.logger.debug(f"  Using original album path: {original_source_path}")
                     break
         
         # Get or create album ID
@@ -624,16 +629,27 @@ class ConversionOrchestrator:
                                         )
                                         
                                         self.logger.debug(f"  Created track record: {track_metadata.get('title', output_file_path.stem)}")
+                                        
+                                        # Check for SACD metadata in source directory and write to FLAC file
+                                        if output_file_path.suffix.lower() == '.flac' and self.config.get('metadata.write_sacd_to_flac', True):
+                                            sacd_metadata_files = find_sacd_metadata_files(album.root_path)
+                                            if sacd_metadata_files:
+                                                sacd_metadata = parse_sacd_metadata_file(sacd_metadata_files[0])
+                                                if sacd_metadata:
+                                                    if write_sacd_metadata_to_flac(output_file_path, sacd_metadata, track_num):
+                                                        self.logger.debug(f"  Wrote SACD metadata to: {output_file_path.name}")
+                                                    else:
+                                                        self.logger.warning(f"  Failed to write SACD metadata to: {output_file_path.name}")
                                     
                                     elif is_iso:
                                         # Multi-track ISO conversion
                                         # ISO files create multiple output files in the output directory
                                         # Find all created FLAC/DSF files in the output directory
-                                        output_dir = output_file_path.parent
+                                        iso_output_dir = output_file_path.parent
                                         
                                         # Look for SACD metadata files
                                         sacd_metadata = None
-                                        metadata_files = find_sacd_metadata_files(output_dir)
+                                        metadata_files = find_sacd_metadata_files(iso_output_dir)
                                         if not metadata_files:
                                             # Also check source directory
                                             metadata_files = find_sacd_metadata_files(album.root_path)
@@ -665,7 +681,7 @@ class ConversionOrchestrator:
                                             pattern = '*.dsf'
                                         
                                         # Find all output files
-                                        output_files = sorted(output_dir.glob(pattern))
+                                        output_files = sorted(iso_output_dir.glob(pattern))
                                         
                                         if output_files:
                                             self.logger.debug(f"  Processing {len(output_files)} tracks from ISO")
@@ -706,8 +722,15 @@ class ConversionOrchestrator:
                                                 )
                                                 
                                                 self.logger.debug(f"  Created track record: {track_metadata.get('title', track_file.stem)}")
+                                                
+                                                # Write SACD metadata to FLAC file
+                                                if sacd_metadata and track_file.suffix.lower() == '.flac' and self.config.get('metadata.write_sacd_to_flac', True):
+                                                    if write_sacd_metadata_to_flac(track_file, sacd_metadata, track_num):
+                                                        self.logger.debug(f"  Wrote SACD metadata to: {track_file.name}")
+                                                    else:
+                                                        self.logger.warning(f"  Failed to write SACD metadata to: {track_file.name}")
                                         else:
-                                            self.logger.warning(f"  No output files found for ISO conversion in {output_dir}")
+                                            self.logger.warning(f"  No output files found for ISO conversion in {iso_output_dir}")
                             
                             self.state_manager.update_file_status(
                                 album.root_path,
@@ -869,7 +892,72 @@ class ConversionOrchestrator:
                 
                 # Use the original source path determined at the beginning of the method
                 # to get the correct album name for the output directory
+                self.logger.debug(f"  output_dir: {output_dir}")
+                self.logger.debug(f"  original_source_path: {original_source_path}")
+                self.logger.debug(f"  original_source_path.name: {original_source_path.name}")
                 output_album_path = output_dir / original_source_path.name
+                self.logger.info(f"  Calculated output_album_path: {output_album_path}")
+                self.logger.info(f"  Moving from: {working_processed_path}")
+                
+                # If output path matches the original source location (common when output dir is input dir),
+                # remove the original source directory first so the move can replace it cleanly.
+                if (original_source_path.exists() and 
+                        output_album_path.resolve() == original_source_path.resolve()):
+                    self.logger.info(f"  Removing original source before move: {original_source_path}")
+                    try:
+                        if original_source_path.is_file():
+                            original_source_path.unlink()
+                        else:
+                            shutil.rmtree(original_source_path)
+                        source_removed_pre_move = True
+                        self.logger.info(f"  Original source removed: {original_source_path}")
+                    except Exception as e:
+                        error_msg = f"Failed to remove original source before move: {e}"
+                        self.logger.error(f"  {error_msg}")
+                        self.state_manager.update_album_status(
+                            album.root_path,
+                            AlbumStatus.FAILED,
+                            error_message=error_msg,
+                            processing_stage='failed_finalize'
+                        )
+                        if self.database:
+                            self.database.add_processing_history(
+                                album_id=album_id,
+                                operation_type='finalize',
+                                status='failed',
+                                error_message=error_msg,
+                                duration_seconds=(datetime.now() - finalize_start).total_seconds()
+                            )
+                        return False
+                
+                # Remove existing output path if it already exists (e.g., reprocessing same album)
+                if output_album_path.exists():
+                    self.logger.warning(f"  Output path already exists, removing: {output_album_path}")
+                    try:
+                        if output_album_path.is_file():
+                            output_album_path.unlink()
+                        else:
+                            shutil.rmtree(output_album_path)
+                        self.logger.info(f"  Removed existing output path: {output_album_path}")
+                    except Exception as e:
+                        error_msg = f"Failed to remove existing output path: {e}"
+                        self.logger.error(f"  {error_msg}")
+                        self.state_manager.update_album_status(
+                            album.root_path,
+                            AlbumStatus.FAILED,
+                            error_message=error_msg,
+                            processing_stage='failed_finalize'
+                        )
+                        if self.database:
+                            self.database.add_processing_history(
+                                album_id=album_id,
+                                operation_type='finalize',
+                                status='failed',
+                                error_message=error_msg,
+                                duration_seconds=(datetime.now() - finalize_start).total_seconds()
+                            )
+                        # Do not cleanup working dirs so resume can recover
+                        return False
                 
                 # Move processed to output
                 success, error = self.working_dir_manager.move_to_output(
@@ -950,12 +1038,11 @@ class ConversionOrchestrator:
                             )
                 
                 # Remove source files if configured
-                if self.config.get('processing.remove_source_after_conversion', False):
+                if self.config.get('processing.remove_source_after_conversion', False) and not source_removed_pre_move:
                     self.logger.info("  Removing source files from input directory...")
                     # Safety check: only remove if the path exists and is not a working directory
                     if original_source_path.exists() and not str(original_source_path).endswith(('_source', '_processed')):
                         try:
-                            import shutil
                             shutil.rmtree(original_source_path)
                             self.logger.info(f"  Successfully removed: {original_source_path}")
                             
@@ -1007,7 +1094,7 @@ class ConversionOrchestrator:
             self.state_manager.update_album_status(
                 album.root_path,
                 AlbumStatus.COMPLETED,
-                processing_stage='completed',
+                processing_stage='finalized',
                 working_source_path=None if cleanup_on_success else working_source_path,
                 working_processed_path=None  # Already moved
             )
@@ -1015,7 +1102,7 @@ class ConversionOrchestrator:
             if self.database:
                 self.database.update_album(
                     album_id=album_id,
-                    processing_stage='completed',
+                    processing_stage='finalized',
                     working_source_path=None,
                     working_processed_path=None
                 )
@@ -1187,7 +1274,9 @@ class ConversionOrchestrator:
         return metadata
 
 @click.command()
-@click.argument('input_dir', type=click.Path(exists=True, file_okay=False, path_type=Path))
+@click.argument('input_dir', type=click.Path(exists=True, file_okay=False, path_type=Path), required=False)
+@click.option('--input', '-i', 'input_dir_option', type=click.Path(exists=True, file_okay=False, path_type=Path),
+              help='Input directory containing music files (can be specified in config)')
 @click.option('--output', '-o', 'output_dir', type=click.Path(path_type=Path),
               help='Output directory (default: same as input)')
 @click.option('--archive', '-a', 'archive_dir', type=click.Path(path_type=Path),
@@ -1213,7 +1302,8 @@ class ConversionOrchestrator:
 @click.option('--single-album', is_flag=True,
               help='Treat INPUT_DIR as a single album (preserves internal structure like CD1, CD2)')
 def main(
-    input_dir: Path,
+    input_dir: Optional[Path],
+    input_dir_option: Optional[Path],
     output_dir: Optional[Path],
     archive_dir: Optional[Path],
     mode: Optional[str],
@@ -1230,7 +1320,7 @@ def main(
     """
     DSD Music Converter - Convert ISO/DSF files to FLAC or DSF.
     
-    INPUT_DIR: Directory containing music files to convert
+    INPUT_DIR: Directory containing music files to convert (optional, can be specified in config)
     """
     
     # Handle pause signal
@@ -1244,8 +1334,12 @@ def main(
         # Load configuration
         config = Config(config_file)
         
+        # Determine input_dir: CLI argument takes precedence, then CLI option, then config
+        final_input_dir = input_dir or input_dir_option
+        
         # Override with CLI arguments
         config.update_from_args(
+            input_dir=str(final_input_dir) if final_input_dir else None,
             output_dir=str(output_dir) if output_dir else None,
             archive_dir=str(archive_dir) if archive_dir else None,
             mode=mode,
@@ -1255,12 +1349,32 @@ def main(
             log_level=log_level
         )
         
+        # Get input_dir from config if not provided via CLI
+        if not final_input_dir:
+            input_dir_str = config.get('paths.input_dir')
+            if input_dir_str:
+                final_input_dir = Path(input_dir_str)
+        
         # Validate configuration
         is_valid, errors = config.validate()
         if not is_valid:
             click.echo("Configuration errors:", err=True)
             for error in errors:
                 click.echo(f"  - {error}", err=True)
+            sys.exit(1)
+        
+        # Ensure we have an input directory
+        if not final_input_dir:
+            click.echo("Error: Input directory must be provided either via CLI or config file", err=True)
+            sys.exit(1)
+        
+        # Verify input directory exists
+        if not final_input_dir.exists():
+            click.echo(f"Error: Input directory does not exist: {final_input_dir}", err=True)
+            sys.exit(1)
+        
+        if not final_input_dir.is_dir():
+            click.echo(f"Error: Input path is not a directory: {final_input_dir}", err=True)
             sys.exit(1)
         
         # Set up logging
@@ -1280,7 +1394,7 @@ def main(
             single_album=single_album
         )
         
-        success = orchestrator.run(input_dir)
+        success = orchestrator.run(final_input_dir)
         
         sys.exit(0 if success else 1)
         

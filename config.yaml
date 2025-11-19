@@ -44,6 +44,9 @@ conversion:
 
 # Paths
 paths:
+  # Input directory containing music files to convert (required)
+  input_dir: /Volumes/PrimaryHD_8TB/ConversionTest/IN
+  
   # Archive location for original files (required)
   archive_dir: /Volumes/PrimaryHD_8TB/ConversionTest/Archive
   
@@ -90,6 +93,10 @@ metadata:
   
   # Behavior: 'fill_missing' or 'overwrite'
   behavior: fill_missing
+  
+  # Write SACD metadata to output FLAC files
+  # If SACD text metadata is found, writes label, catalog number, genre, etc. to FLAC tags
+  write_sacd_to_flac: true
 
 # Processing Options
 processing:

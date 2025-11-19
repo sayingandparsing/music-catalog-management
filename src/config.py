@@ -87,6 +87,7 @@ class Config:
         """
         # Map CLI argument names to config paths
         arg_mapping = {
+            'input_dir': 'paths.input_dir',
             'output_dir': 'paths.output_dir',
             'archive_dir': 'paths.archive_dir',
             'mode': 'conversion.mode',
@@ -110,6 +111,10 @@ class Config:
         errors = []
         
         # Check required fields
+        input_dir = self.get('paths.input_dir')
+        if not input_dir:
+            errors.append("Input directory is required (paths.input_dir)")
+        
         archive_dir = self.get('paths.archive_dir')
         if not archive_dir:
             errors.append("Archive directory is required (paths.archive_dir)")

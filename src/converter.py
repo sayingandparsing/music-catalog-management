@@ -64,7 +64,16 @@ class AudioConverter:
         """
         self.sample_rate = sample_rate
         self.bit_depth = bit_depth
+        
+        # Validate conversion mode
+        valid_modes = ['iso_dsf_to_flac', 'iso_to_dsf']
+        if mode not in valid_modes:
+            raise ValueError(
+                f"Invalid conversion mode: '{mode}'. "
+                f"Valid modes are: {', '.join(valid_modes)}"
+            )
         self.mode = mode
+        
         self.resampler = resampler
         self.soxr_precision = soxr_precision
         self.dither_method = dither_method
@@ -122,12 +131,31 @@ class AudioConverter:
         Returns:
             Tuple of (success, error_message, duration_seconds, dynamic_range_metrics)
         """
+        # Initialize start_time early to avoid NameError in exception handler
+        start_time = time.time()
+        
         # Validate input
         if not input_path.exists():
             return False, f"Input file not found: {input_path}", 0.0, None
         
-        # Check output
-        if output_path.exists():
+        # Determine input extension
+        input_ext = input_path.suffix.lower()
+        
+        # Check output - special handling for ISO files
+        if input_ext == '.iso' and skip_existing:
+            # For ISO files, check if output tracks already exist
+            # We can't check a single output_path since ISOs create multiple files
+            output_ext = '.flac' if self.mode == 'iso_dsf_to_flac' else '.dsf'
+            existing_tracks = list(output_path.parent.glob(f'*{output_ext}'))
+            
+            # Filter to valid non-empty files
+            valid_existing = [f for f in existing_tracks if f.exists() and f.stat().st_size > 100]
+            
+            if valid_existing:
+                # Some tracks exist - skip if we have reasonable output already
+                # (We can't know exact count without extraction, so we trust existing files)
+                return True, f"Already converted (skipped, {len(valid_existing)} tracks found)", 0.0, None
+        elif output_path.exists():
             if skip_existing:
                 # Skip this file - already converted (resume scenario)
                 return True, "Already converted (skipped)", 0.0, None
@@ -136,11 +164,6 @@ class AudioConverter:
         
         # Create output directory
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Determine conversion based on file type and mode
-        input_ext = input_path.suffix.lower()
-        
-        start_time = time.time()
         
         try:
             # Handle FLAC standardization if enabled
@@ -159,8 +182,11 @@ class AudioConverter:
                     return True, "Already at target format (24/88.2), skipped", duration, None
                 
                 # Check if higher quality and should skip
+                # Use AND logic: both sample rate AND bit depth must be higher
+                # to consider source unambiguously "higher quality"
+                # (avoids ambiguous cases like 16/192k vs 24/88k)
                 is_higher_quality = (
-                    source_specs['sample_rate'] > self.sample_rate or
+                    source_specs['sample_rate'] > self.sample_rate and
                     source_specs['bit_depth'] > self.bit_depth
                 )
                 
@@ -172,9 +198,12 @@ class AudioConverter:
                 # Proceed with FLAC to FLAC conversion
                 success, error = self._convert_flac_to_flac(input_path, output_path, source_specs)
             
-            elif self.mode == "iso_dsf_to_flac":
+            # Track expected output count for ISO files
+            expected_track_count = 0
+            
+            if self.mode == "iso_dsf_to_flac":
                 if input_ext in ['.iso']:
-                    success, error = self._convert_iso_to_flac(input_path, output_path)
+                    success, error, expected_track_count = self._convert_iso_to_flac(input_path, output_path)
                 elif input_ext in ['.dsf', '.dff']:
                     success, error = self._convert_dsf_to_flac(input_path, output_path)
                 elif input_ext == '.flac':
@@ -196,15 +225,32 @@ class AudioConverter:
             duration = time.time() - start_time
             
             # Verify output was created
-            # For ISO files, skip verification since multi-track ISOs create multiple files
-            if success and input_ext != '.iso' and not output_path.exists():
-                return False, "Conversion completed but output file not found", duration, None
-            
-            # For ISO files, verify at least one file was created in the output directory
-            if success and input_ext == '.iso':
-                output_files = list(output_path.parent.glob('*.flac' if self.mode == 'iso_dsf_to_flac' else '*.dsf'))
-                if not output_files:
-                    return False, "Conversion completed but no output files found", duration, None
+            if success:
+                if input_ext == '.iso':
+                    # Enhanced verification for ISO files
+                    output_ext = '.flac' if self.mode == 'iso_dsf_to_flac' else '.dsf'
+                    output_files = list(output_path.parent.glob(f'*{output_ext}'))
+                    
+                    # Filter to only newly created files (non-empty, reasonable size)
+                    valid_files = [f for f in output_files if f.exists() and f.stat().st_size > 100]
+                    
+                    if not valid_files:
+                        return False, "Conversion completed but no output files found", duration, None
+                    
+                    # Verify expected track count if available
+                    if expected_track_count > 0 and len(valid_files) != expected_track_count:
+                        return False, (
+                            f"Track count mismatch: expected {expected_track_count}, "
+                            f"found {len(valid_files)} files"
+                        ), duration, None
+                else:
+                    # For non-ISO files, verify single output file exists
+                    if not output_path.exists():
+                        return False, "Conversion completed but output file not found", duration, None
+                    
+                    # Verify output file is not empty
+                    if output_path.stat().st_size == 0:
+                        return False, "Conversion completed but output file is empty", duration, None
             
             # Calculate dynamic range if enabled and conversion successful
             dynamic_range = None
@@ -325,8 +371,10 @@ class AudioConverter:
             elif self.resampler == 'swr':
                 filters.append('aresample=resampler=swr')
         
-        # Add lowpass filter if configured and resampling
-        if self.lowpass_freq > 0 and source_specs['sample_rate'] != self.sample_rate:
+        # Add lowpass filter if configured and downsampling
+        # Only apply during downsampling to prevent aliasing; upsampling doesn't need it
+        is_downsampling = source_specs['sample_rate'] > self.sample_rate
+        if self.lowpass_freq > 0 and is_downsampling:
             filters.append(f'lowpass={self.lowpass_freq}')
         
         # Build ffmpeg command
@@ -445,7 +493,7 @@ class AudioConverter:
         self,
         input_path: Path,
         output_path: Path
-    ) -> Tuple[bool, Optional[str]]:
+    ) -> Tuple[bool, Optional[str], int]:
         """
         Convert ISO (SACD) to FLAC using sacd_extract + ffmpeg.
         
@@ -459,9 +507,12 @@ class AudioConverter:
             output_path: Output FLAC file (used as base path for multi-track)
             
         Returns:
-            Tuple of (success, error_message)
+            Tuple of (success, error_message, expected_track_count)
         """
         # Create temporary directory for extraction
+        # Note: The context manager ensures cleanup on normal exit or exceptions,
+        # but temp directories may accumulate if process receives SIGKILL.
+        # Cleanup can be done manually: rm -rf /tmp/sacd_extract_*
         with tempfile.TemporaryDirectory(prefix='sacd_extract_') as temp_dir_str:
             temp_dir = Path(temp_dir_str)
             
@@ -469,10 +520,12 @@ class AudioConverter:
             success, error, dsf_files, metadata_file = self._extract_iso_to_dsf(input_path, temp_dir)
             
             if not success:
-                return False, error
+                return False, error, 0
+            
+            track_count = len(dsf_files)
             
             # Handle multi-track ISOs
-            if len(dsf_files) > 1:
+            if track_count > 1:
                 # Convert each track to its own FLAC file
                 all_success = True
                 errors = []
@@ -489,12 +542,13 @@ class AudioConverter:
                         errors.append(f"{dsf_file.name}: {track_error}")
                 
                 if not all_success:
-                    return False, f"Failed to convert {len(errors)} tracks: {'; '.join(errors[:3])}"
+                    return False, f"Failed to convert {len(errors)} tracks: {'; '.join(errors[:3])}", track_count
                 
-                return True, None
+                return True, None, track_count
             else:
                 # Single track ISO - use the provided output path
-                return self._convert_dsf_to_flac(dsf_files[0], output_path)
+                dsf_success, dsf_error = self._convert_dsf_to_flac(dsf_files[0], output_path)
+                return dsf_success, dsf_error, track_count
     
     def _convert_iso_to_dsf(
         self,
@@ -515,6 +569,9 @@ class AudioConverter:
             Tuple of (success, error_message)
         """
         # Create temporary directory for extraction
+        # Note: The context manager ensures cleanup on normal exit or exceptions,
+        # but temp directories may accumulate if process receives SIGKILL.
+        # Cleanup can be done manually: rm -rf /tmp/sacd_extract_*
         with tempfile.TemporaryDirectory(prefix='sacd_extract_') as temp_dir_str:
             temp_dir = Path(temp_dir_str)
             
@@ -820,8 +877,8 @@ class AudioConverter:
                     r128_range = None
             
             return {
-                'dynamic_range_crest': round(crest_db, 2) if crest_db is not None else None,
-                'dynamic_range_r128': round(r128_range, 2) if r128_range is not None else None
+                'dynamic_range_crest': float(round(crest_db, 2)) if crest_db is not None else None,
+                'dynamic_range_r128': float(round(r128_range, 2)) if r128_range is not None else None
             }
         
         except subprocess.TimeoutExpired:

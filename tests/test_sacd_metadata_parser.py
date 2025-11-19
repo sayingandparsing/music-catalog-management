@@ -14,10 +14,17 @@ from sacd_metadata_parser import (
     parse_sacd_metadata_file,
     find_sacd_metadata_files,
     get_metadata_for_album,
+    write_sacd_metadata_to_flac,
     _parse_disc_info,
     _parse_album_info,
     _parse_track_list
 )
+
+try:
+    from mutagen.flac import FLAC
+    MUTAGEN_AVAILABLE = True
+except ImportError:
+    MUTAGEN_AVAILABLE = False
 
 
 SAMPLE_SACD_METADATA = """
@@ -437,6 +444,227 @@ Track list [0]:
         assert metadata['disc']['title'] == 'Björk - Homogénic'
         assert metadata['disc']['artist'] == 'Björk'
         assert metadata['tracks'][0]['title'] == 'Jóga'
+
+
+@pytest.mark.skipif(not MUTAGEN_AVAILABLE, reason="mutagen not available")
+class TestWriteSACDMetadataToFLAC:
+    """Tests for writing SACD metadata to FLAC files."""
+    
+    def create_dummy_flac(self, path: Path) -> Path:
+        """Create a minimal valid FLAC file for testing."""
+        import subprocess
+        # Create a 1-second silent FLAC file using ffmpeg
+        result = subprocess.run([
+            'ffmpeg', '-f', 'lavfi', '-i', 'anullsrc=r=44100:cl=mono', '-t', '0.1',
+            '-y', str(path)
+        ], capture_output=True, timeout=5)
+        
+        if result.returncode != 0:
+            # Fallback: create using Python's wave module and convert to FLAC
+            import wave
+            import struct
+            wav_path = path.with_suffix('.wav')
+            with wave.open(str(wav_path), 'w') as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)
+                wav_file.setframerate(44100)
+                # Write 0.1 seconds of silence
+                samples = [0] * int(44100 * 0.1)
+                wav_file.writeframes(struct.pack('h' * len(samples), *samples))
+            
+            # Convert WAV to FLAC
+            subprocess.run(['ffmpeg', '-i', str(wav_path), '-y', str(path)],
+                         capture_output=True, check=True, timeout=5)
+            wav_path.unlink()
+        
+        return path
+    
+    def test_write_basic_metadata(self, tmp_path):
+        """Test writing basic SACD metadata to FLAC file."""
+        # Create a dummy FLAC file
+        flac_file = tmp_path / "test.flac"
+        self.create_dummy_flac(flac_file)
+        
+        # Create SACD metadata
+        sacd_metadata = {
+            'disc': {
+                'title': 'Test Album',
+                'artist': 'Test Artist',
+                'label': 'Test Label',
+                'catalog_number': 'TEST-001',
+                'genre': 'Jazz'
+            },
+            'tracks': []
+        }
+        
+        # Write metadata
+        result = write_sacd_metadata_to_flac(flac_file, sacd_metadata)
+        
+        assert result is True
+        
+        # Verify metadata was written
+        audio = FLAC(str(flac_file))
+        assert audio.get('label') == ['Test Label']
+        assert audio.get('catalognumber') == ['TEST-001']
+        assert audio.get('genre') == ['Jazz']
+        assert audio.get('album') == ['Test Album']
+        assert audio.get('artist') == ['Test Artist']
+        assert audio.get('albumartist') == ['Test Artist']
+    
+    def test_write_track_metadata(self, tmp_path):
+        """Test writing track-specific metadata."""
+        flac_file = tmp_path / "test.flac"
+        self.create_dummy_flac(flac_file)
+        
+        sacd_metadata = {
+            'disc': {
+                'title': 'Test Album',
+                'artist': 'Album Artist'
+            },
+            'tracks': [
+                {'track_number': 1, 'title': 'Track 1', 'artist': 'Track Artist 1'},
+                {'track_number': 2, 'title': 'Track 2', 'artist': 'Track Artist 2'}
+            ]
+        }
+        
+        # Write metadata for track 2
+        result = write_sacd_metadata_to_flac(flac_file, sacd_metadata, track_number=2)
+        
+        assert result is True
+        
+        # Verify track-specific metadata
+        audio = FLAC(str(flac_file))
+        assert audio.get('title') == ['Track 2']
+        assert audio.get('artist') == ['Track Artist 2']
+        assert audio.get('tracknumber') == ['2']
+        assert audio.get('album') == ['Test Album']
+    
+    def test_preserve_existing_metadata(self, tmp_path):
+        """Test that existing metadata is preserved."""
+        flac_file = tmp_path / "test.flac"
+        self.create_dummy_flac(flac_file)
+        
+        # Add existing metadata
+        audio = FLAC(str(flac_file))
+        audio['title'] = 'Existing Title'
+        audio['genre'] = 'Existing Genre'
+        audio.save()
+        
+        # Try to write SACD metadata
+        sacd_metadata = {
+            'disc': {
+                'title': 'New Album',
+                'genre': 'New Genre',
+                'label': 'New Label'
+            },
+            'tracks': []
+        }
+        
+        result = write_sacd_metadata_to_flac(flac_file, sacd_metadata)
+        
+        assert result is True
+        
+        # Verify existing metadata preserved
+        audio = FLAC(str(flac_file))
+        assert audio.get('title') == ['Existing Title']  # Should not be overwritten
+        assert audio.get('genre') == ['Existing Genre']  # Should not be overwritten
+        assert audio.get('label') == ['New Label']  # New field should be added
+        assert audio.get('album') == ['New Album']  # New field should be added
+    
+    def test_write_with_album_metadata_priority(self, tmp_path):
+        """Test that album metadata is preferred over disc metadata."""
+        flac_file = tmp_path / "test.flac"
+        self.create_dummy_flac(flac_file)
+        
+        sacd_metadata = {
+            'disc': {
+                'title': 'Disc Title',
+                'label': 'Disc Label',
+                'catalog_number': 'DISC-001'
+            },
+            'album': {
+                'title': 'Album Title',
+                'label': 'Album Label',
+                'catalog_number': 'ALBUM-001'
+            },
+            'tracks': []
+        }
+        
+        result = write_sacd_metadata_to_flac(flac_file, sacd_metadata)
+        
+        assert result is True
+        
+        # Verify album metadata used
+        audio = FLAC(str(flac_file))
+        assert audio.get('album') == ['Album Title']
+        assert audio.get('label') == ['Album Label']
+        assert audio.get('catalognumber') == ['ALBUM-001']
+    
+    def test_write_handles_missing_fields(self, tmp_path):
+        """Test writing with partial/missing metadata."""
+        flac_file = tmp_path / "test.flac"
+        self.create_dummy_flac(flac_file)
+        
+        # Minimal metadata
+        sacd_metadata = {
+            'disc': {
+                'label': 'Only Label'
+            },
+            'tracks': []
+        }
+        
+        result = write_sacd_metadata_to_flac(flac_file, sacd_metadata)
+        
+        assert result is True
+        
+        # Verify only available field written
+        audio = FLAC(str(flac_file))
+        assert audio.get('label') == ['Only Label']
+        assert audio.get('catalognumber') is None
+        assert audio.get('genre') is None
+    
+    def test_write_fails_for_nonexistent_file(self, tmp_path):
+        """Test that writing fails gracefully for nonexistent files."""
+        flac_file = tmp_path / "nonexistent.flac"
+        
+        sacd_metadata = {
+            'disc': {'label': 'Test'},
+            'tracks': []
+        }
+        
+        result = write_sacd_metadata_to_flac(flac_file, sacd_metadata)
+        
+        assert result is False
+    
+    def test_write_fails_for_directory(self, tmp_path):
+        """Test that writing fails gracefully for directories."""
+        sacd_metadata = {
+            'disc': {'label': 'Test'},
+            'tracks': []
+        }
+        
+        result = write_sacd_metadata_to_flac(tmp_path, sacd_metadata)
+        
+        assert result is False
+    
+    def test_write_with_empty_metadata(self, tmp_path):
+        """Test writing with empty metadata."""
+        flac_file = tmp_path / "test.flac"
+        self.create_dummy_flac(flac_file)
+        
+        result = write_sacd_metadata_to_flac(flac_file, {})
+        
+        # Should succeed but not write anything
+        assert result is True
+    
+    def test_write_with_none_metadata(self, tmp_path):
+        """Test writing with None metadata."""
+        flac_file = tmp_path / "test.flac"
+        self.create_dummy_flac(flac_file)
+        
+        result = write_sacd_metadata_to_flac(flac_file, None)
+        
+        assert result is False
 
 
 if __name__ == '__main__':

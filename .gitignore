@@ -28,6 +28,12 @@ wheels/
 .state/
 *.log
 
+# Working directory (default: ./working)
+working/
+
+# Database files (default: ./music_catalog.duckdb)
+*.duckdb
+
 # IDE
 .vscode/
 .idea/

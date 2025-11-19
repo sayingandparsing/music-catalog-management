@@ -7,6 +7,11 @@ import re
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
+try:
+    from mutagen.flac import FLAC
+except ImportError:
+    FLAC = None
+
 
 def parse_sacd_metadata_file(file_path: Path) -> Optional[Dict[str, Any]]:
     """
@@ -308,7 +313,9 @@ def find_sacd_metadata_files(directory: Path) -> List[Path]:
                     continue
                 
                 with open(file, 'r', encoding='utf-8', errors='ignore') as f:
-                    content = f.read(1000)  # Read first 1000 chars
+                    # Read first 50KB to handle files with long headers/preambles
+                    # (previous 1000 char limit could miss markers in files with verbose headers)
+                    content = f.read(50000)
                     # Check for SACD metadata markers
                     if any(marker in content for marker in ['Disc Information:', 'Album Information:', 'Track list']):
                         verified_files.append(file)
@@ -348,4 +355,109 @@ def get_metadata_for_album(album_directory: Path) -> Optional[Dict[str, Any]]:
     except Exception as e:
         print(f"Error getting metadata for album {album_directory}: {e}")
         return None
+
+
+def write_sacd_metadata_to_flac(
+    flac_file: Path,
+    sacd_metadata: Dict[str, Any],
+    track_number: Optional[int] = None
+) -> bool:
+    """
+    Write SACD metadata to FLAC file using standard Vorbis comment fields.
+    
+    Uses standard field names:
+    - LABEL (for publisher/label)
+    - CATALOGNUMBER (for catalog number)
+    - GENRE (for genre)
+    - ARTIST, ALBUM, TITLE (for track info)
+    
+    Only writes fields that are missing in the FLAC file (doesn't overwrite).
+    
+    Args:
+        flac_file: Path to FLAC file
+        sacd_metadata: Parsed SACD metadata dictionary
+        track_number: Optional track number for track-specific metadata
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    if not FLAC:
+        print("Warning: mutagen not available, cannot write FLAC metadata")
+        return False
+    
+    if not flac_file or not flac_file.exists():
+        return False
+    
+    if not flac_file.is_file():
+        return False
+    
+    if sacd_metadata is None:
+        return False
+    
+    try:
+        # Load FLAC file
+        audio = FLAC(str(flac_file))
+        
+        # Get disc/album metadata (prefer album over disc)
+        sacd_info = sacd_metadata.get('album', {}) or sacd_metadata.get('disc', {})
+        
+        if sacd_info:
+            # Write LABEL (Publisher → LABEL)
+            if 'label' in sacd_info and sacd_info['label']:
+                if 'label' not in audio:
+                    audio['label'] = sacd_info['label']
+            
+            # Write CATALOGNUMBER (Disc Catalog Number → CATALOGNUMBER)
+            if 'catalog_number' in sacd_info and sacd_info['catalog_number']:
+                if 'catalognumber' not in audio:
+                    audio['catalognumber'] = sacd_info['catalog_number']
+            
+            # Write GENRE (Disc Genre → GENRE)
+            if 'genre' in sacd_info and sacd_info['genre']:
+                if 'genre' not in audio:
+                    audio['genre'] = sacd_info['genre']
+            
+            # Write ARTIST (album artist)
+            if 'artist' in sacd_info and sacd_info['artist']:
+                if 'artist' not in audio:
+                    audio['artist'] = sacd_info['artist']
+                # Also set ALBUMARTIST if not present
+                if 'albumartist' not in audio:
+                    audio['albumartist'] = sacd_info['artist']
+            
+            # Write ALBUM (album title)
+            if 'title' in sacd_info and sacd_info['title']:
+                if 'album' not in audio:
+                    audio['album'] = sacd_info['title']
+        
+        # Write track-specific metadata if track_number provided
+        if track_number is not None and 'tracks' in sacd_metadata:
+            for track in sacd_metadata['tracks']:
+                if track.get('track_number') == track_number:
+                    # Write TITLE
+                    if 'title' in track and track['title']:
+                        if 'title' not in audio:
+                            audio['title'] = track['title']
+                    
+                    # Write ARTIST (track artist, always use track artist if available)
+                    if 'artist' in track and track['artist']:
+                        # Track artist overrides album artist
+                        audio['artist'] = track['artist']
+                    
+                    # Write TRACKNUMBER
+                    if 'tracknumber' not in audio:
+                        audio['tracknumber'] = str(track_number)
+                    
+                    break
+        
+        # Save changes (even if no metadata was written, to ensure file validity)
+        audio.save()
+        return True
+        
+    except PermissionError as e:
+        print(f"Error: Permission denied writing to {flac_file}: {e}")
+        return False
+    except Exception as e:
+        print(f"Error writing SACD metadata to {flac_file}: {e}")
+        return False
 

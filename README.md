@@ -73,26 +73,37 @@ All Python dependencies are listed in `requirements.txt` and can be installed vi
 
 ## Quick Start
 
-1. **Basic conversion** (ISO/DSF to FLAC):
+1. **Configure input directory in config.yaml** (recommended):
+   ```yaml
+   paths:
+     input_dir: /path/to/your/music
+     archive_dir: /path/to/your/archive
+   ```
+   Then run:
+   ```bash
+   python src/main.py
+   ```
+
+2. **Or use command-line arguments**:
    ```bash
    python src/main.py /path/to/music --archive /path/to/archive
    ```
 
-2. **Convert with custom output directory**:
+3. **Convert with custom output directory**:
    ```bash
    python src/main.py /path/to/music \
      --archive /path/to/archive \
      --output /path/to/output
    ```
 
-3. **Convert ISO to DSF**:
+4. **Convert ISO to DSF**:
    ```bash
    python src/main.py /path/to/music \
      --archive /path/to/archive \
      --mode iso_to_dsf
    ```
 
-4. **With metadata enrichment**:
+5. **With metadata enrichment**:
    ```bash
    python src/main.py /path/to/music \
      --archive /path/to/archive \
@@ -112,6 +123,7 @@ conversion:
   bit_depth: 24
 
 paths:
+  input_dir: /path/to/your/music  # Can be specified in config instead of CLI
   archive_dir: /path/to/archive
   output_dir: null  # null = same as input
 
@@ -165,10 +177,13 @@ python src/main.py /path/to/music \
 ## Command-Line Options
 
 ```
-Usage: main.py [OPTIONS] INPUT_DIR
+Usage: main.py [OPTIONS] [INPUT_DIR]
+
+  INPUT_DIR is optional and can be specified in config.yaml instead.
 
 Options:
-  -o, --output PATH              Output directory (default: same as input)
+  -i, --input PATH              Input directory (can be specified in config)
+  -o, --output PATH             Output directory (default: same as input)
   -a, --archive PATH            Archive directory for backups (required)
   -m, --mode [iso_dsf_to_flac|iso_to_dsf]
                                 Conversion mode
@@ -182,18 +197,38 @@ Options:
   --dry-run                     Simulate conversion without actually converting
   --log-level [DEBUG|INFO|WARNING|ERROR]
                                 Logging level
+  --single-album                Treat INPUT_DIR as a single album
   --help                        Show this message and exit
 ```
+
+**Note:** The input directory can be specified in three ways (in order of precedence):
+1. As a positional argument: `python src/main.py /path/to/music`
+2. As an option: `python src/main.py --input /path/to/music`
+3. In config.yaml: `paths.input_dir: /path/to/music`
 
 ## Usage Examples
 
 ### Example 1: Basic Conversion
 
-Convert all DSD files in a music directory to FLAC:
+Convert all DSD files in a music directory to FLAC.
 
+**Option A: Using config file (recommended):**
+
+First, set up your `config.yaml`:
+```yaml
+paths:
+  input_dir: ~/Music/DSD
+  archive_dir: ~/Music/Archive
+```
+
+Then run:
 ```bash
-python src/main.py ~/Music/DSD \
-  --archive ~/Music/Archive
+python src/main.py
+```
+
+**Option B: Using command-line:**
+```bash
+python src/main.py ~/Music/DSD --archive ~/Music/Archive
 ```
 
 **What happens:**

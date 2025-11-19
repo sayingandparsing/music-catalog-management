@@ -38,6 +38,9 @@ conversion:
 
 # Paths
 paths:
+  # Input directory containing music files to convert (REQUIRED - set this!)
+  input_dir: /path/to/your/input
+  
   # Archive location for original files (REQUIRED - set this!)
   archive_dir: /path/to/your/archive
   
@@ -78,6 +81,10 @@ metadata:
   
   # Behavior: 'fill_missing' (only add to empty fields) or 'overwrite' (replace all)
   behavior: fill_missing
+  
+  # Write SACD metadata to output FLAC files
+  # If SACD text metadata is found, writes label, catalog number, genre, etc. to FLAC tags
+  write_sacd_to_flac: true
 
 # Processing Options
 processing:

@@ -411,7 +411,15 @@ class WorkingDirectoryManager:
         """
         Estimate space required for processing an album.
         
-        Approximates: 2x for source copy + 1x for converted output = 3x
+        For regular files: 3x (source copy + processing buffer)
+        For ISO files: 5x (source + extraction + conversion + temp buffers)
+        
+        ISO workflow requires more space due to:
+        1. Copy ISO to working_source (1x)
+        2. Extract ISO to DSF in temp (1x+, can be larger)
+        3. Convert DSF to FLAC in working_processed (0.5x)
+        4. Archive copy (1x)
+        5. Temporary buffers and overhead (1x)
         
         Args:
             album_path: Path to album
@@ -423,16 +431,22 @@ class WorkingDirectoryManager:
             return 0
         
         total_size = 0
+        has_iso_files = False
+        
         for root, dirs, files in os.walk(album_path):
             for filename in files:
                 file_path = Path(root) / filename
                 try:
                     total_size += file_path.stat().st_size
+                    # Check if this is an ISO file
+                    if file_path.suffix.lower() == '.iso':
+                        has_iso_files = True
                 except:
                     pass
         
-        # Estimate 3x: 1x for source, 2x for processing buffer
-        return total_size * 3
+        # Use higher multiplier for ISO files due to extraction overhead
+        multiplier = 5 if has_iso_files else 3
+        return total_size * multiplier
     
     def check_disk_space(
         self,

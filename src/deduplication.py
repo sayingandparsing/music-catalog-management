@@ -229,14 +229,22 @@ class DeduplicationManager:
         # Check if duplicate exists by checksum
         duplicate = self.find_duplicate_by_checksum(audio_files)
         if duplicate:
-            album_id = duplicate['album_id']
-            # Update metadata file with existing ID
-            checksum = AlbumMetadata.calculate_audio_checksum(audio_files)
-            metadata.write(
-                album_id=album_id,
-                audio_checksum=checksum
-            )
-            return album_id
+            # Validate that the duplicate album completed successfully
+            # Only reuse ID if the original has a playback_path (indicates completion)
+            if duplicate.get('playback_path'):
+                album_id = duplicate['album_id']
+                # Update metadata file with existing ID
+                checksum = AlbumMetadata.calculate_audio_checksum(audio_files)
+                metadata.write(
+                    album_id=album_id,
+                    audio_checksum=checksum
+                )
+                return album_id
+            else:
+                # Duplicate exists but processing was incomplete/failed
+                # Generate a new ID instead of reusing the incomplete one
+                print(f"Warning: Found duplicate album {duplicate['album_id']} but it's incomplete (no playback_path). Generating new ID.")
+                pass  # Fall through to generate new ID
         
         # Generate new album ID
         album_id = AlbumMetadata.generate_album_id()
